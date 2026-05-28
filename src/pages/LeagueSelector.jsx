@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useFetch } from '../hooks/useFetch';
 import ClubBadge from '../components/ClubBadge';
@@ -150,18 +150,7 @@ export default function LeagueSelector() {
   const [step,   setStep]   = useState('league'); // 'league' | 'team'
   const [picked, setPicked] = useState(null);     // selected LEAGUES entry
 
-  // Auto-redirect returning users — skip if the user tapped "switch" in the nav badge.
-  // Tournament leagues (e.g. world-cup) have no team picker so don't require a stored team.
-  useEffect(() => {
-    if (isSwitch) return;
-    const pref = localStorage.getItem('preferredLeague');
-    const team = localStorage.getItem('favouriteTeam');
-    if (!pref) return;
-    const league = getLeague(pref);
-    if (league.tournament || team) {
-      navigate(`/league/${pref}`, { replace: true });
-    }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // No auto-redirect — always show the league selector on entry.
 
   const handleLeagueClick = (league) => {
     if (!league.available) return;
