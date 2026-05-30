@@ -247,8 +247,8 @@ function OffSeasonCard({ standings, standingsRow, recentResults, favTeam, league
 
         {/* Champion */}
         {champion && (
-          <div style={{ marginTop: 20 }}>
-            <div style={{ marginBottom: 8 }}>
+          <div style={{ marginTop: 20, textAlign: 'center' }}>
+            <div style={{ marginBottom: 8, display: 'flex', justifyContent: 'center' }}>
               <Crest src={champion.crest} alt={champion.shortName} size={60} />
             </div>
             <div style={{
