@@ -4733,7 +4733,7 @@ app.get('/api/fd/h2h', async (req, res) => {
 // GET /api/fd/opponent-analysis?league=la-liga&opponentId=X&opponentName=Y&myTeamName=Z
 // AI scout report derived from cached FD match data (no FPL dependency).
 app.get('/api/fd/opponent-analysis', async (req, res) => {
-  const { league, opponentId, opponentName, myTeamName = 'your team' } = req.query;
+  const { league, opponentId, opponentName, myTeamName = 'your team', myTeamId } = req.query;
   const code = FD_CODE[league];
   if (!code || !opponentId || !opponentName) {
     return res.status(400).json({ error: 'league, opponentId and opponentName required' });
@@ -4745,9 +4745,17 @@ app.get('/api/fd/opponent-analysis', async (req, res) => {
   if (cached) return res.json(cached);
 
   try {
-    const allMatches = await getFdMatches(code);
+    const oppId   = Number(opponentId);
+    const myId    = myTeamId ? Number(myTeamId) : null;
 
-    const oppId = Number(opponentId);
+    // Fetch all data in parallel — all cached so no extra API cost
+    const [allMatches, standingsData, scorersData] = await Promise.all([
+      getFdMatches(code),
+      fdFetch(`/competitions/${code}/standings`).catch(() => null),
+      fdFetch(`/competitions/${code}/scorers?limit=20`).catch(() => null),
+    ]);
+
+    // ── Last 5 form ──────────────────────────────────────────────────────────
     const last5 = allMatches
       .filter(m => m.finished && m.homeGoals != null &&
         (m.homeTeam.id === oppId || m.awayTeam.id === oppId))
@@ -4775,15 +4783,54 @@ app.get('/api/fd/opponent-analysis', async (req, res) => {
       return `${r} ${venue} vs ${opp} (${score})`;
     }).join(', ');
 
-    const systemPrompt = `You are an elite football scout writing for ${myTeamName}'s coaching staff. Be sharp, specific, and analytical — no fluff. Use **bold** for key stats and tactical observations. Under 260 words. Do NOT name individual players unless their name appears in the data provided — describe team-level patterns only.`;
+    // ── League position ──────────────────────────────────────────────────────
+    const table = standingsData?.standings?.[0]?.table ?? [];
+    const oppRow  = table.find(r => r.team?.id === oppId);
+    const myRow   = myId ? table.find(r => r.team?.id === myId) : null;
+    const totalTeams = table.length || '?';
+    const positionText = oppRow
+      ? `${oppRow.position}/${totalTeams} — ${oppRow.points} pts, ${oppRow.won}W ${oppRow.draw}D ${oppRow.lost}L, GD ${oppRow.goalDifference > 0 ? '+' : ''}${oppRow.goalDifference}`
+      : 'unknown';
+    const myPositionText = myRow
+      ? `${myRow.position}/${totalTeams} — ${myRow.points} pts`
+      : null;
+
+    // ── H2H ─────────────────────────────────────────────────────────────────
+    let h2hText = '';
+    if (myId) {
+      const h2h = allMatches
+        .filter(m => m.finished && m.homeGoals != null && (
+          (m.homeTeam.id === oppId && m.awayTeam.id === myId) ||
+          (m.homeTeam.id === myId  && m.awayTeam.id === oppId)
+        ))
+        .sort((a, b) => new Date(b.kickoffTime) - new Date(a.kickoffTime))
+        .slice(0, 5);
+
+      if (h2h.length) {
+        h2hText = 'Recent H2H: ' + h2h.map(m =>
+          `${m.homeTeam.name} ${m.homeGoals}–${m.awayGoals} ${m.awayTeam.name}`
+        ).join(', ');
+      }
+    }
+
+    // ── Top scorer for opponent ──────────────────────────────────────────────
+    const oppScorer = (scorersData?.scorers ?? []).find(s => s.team?.id === oppId);
+    const scorerText = oppScorer
+      ? `Top scorer: ${oppScorer.player.name} — ${oppScorer.goals} goals${oppScorer.assists ? `, ${oppScorer.assists} assists` : ''}`
+      : '';
+
+    const systemPrompt = `You are an elite football scout writing for ${myTeamName}'s coaching staff. Be sharp, specific, and analytical — no fluff. Use **bold** for key stats and player names. Under 300 words. Only reference players mentioned in the data provided.`;
     const userPrompt   = `Scout report: **${opponentName}** as ${myTeamName}'s upcoming opponent.
 
+League position: ${positionText}${myPositionText ? `\n${myTeamName} position: ${myPositionText}` : ''}
 Last 5 form: ${formStr || 'unknown'}
-Avg goals scored per game: ${(gf / n).toFixed(2)}
-Avg goals conceded per game: ${(ga / n).toFixed(2)}
-Recent results (${n} games): ${resultsSummary || 'No data'}
+Avg goals scored per game (last 5): ${(gf / n).toFixed(2)}
+Avg goals conceded per game (last 5): ${(ga / n).toFixed(2)}
+Recent results: ${resultsSummary || 'No data'}
+${scorerText}
+${h2hText}
 
-Cover in 3 tight paragraphs: (1) attacking threat and danger patterns, (2) defensive vulnerabilities ${myTeamName} can exploit, (3) the key tactical battle that will decide the game.`;
+Cover in 3 tight paragraphs: (1) attacking threat and key danger man, (2) defensive vulnerabilities ${myTeamName} can exploit, (3) the key tactical battle that will decide the game.`;
 
     const analysis = await groqChat([
       { role: 'system', content: systemPrompt },
