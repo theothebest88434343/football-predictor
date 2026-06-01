@@ -16,5 +16,27 @@
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
+    <!-- Twemoji: cross-platform emoji rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/twemoji@14.0.2/dist/twemoji.min.js" crossorigin="anonymous"></script>
+    <script>
+      function applyTwemoji() {
+        if (typeof twemoji === 'undefined') return;
+        twemoji.parse(document.body, {
+          folder: 'svg',
+          ext: '.svg',
+          base: 'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/',
+        });
+      }
+      // Run after React mounts and on every DOM change
+      var _twObserver = new MutationObserver(function(mutations) {
+        _twObserver.disconnect();
+        applyTwemoji();
+        _twObserver.observe(document.body, { childList: true, subtree: true });
+      });
+      document.addEventListener('DOMContentLoaded', function() {
+        applyTwemoji();
+        _twObserver.observe(document.body, { childList: true, subtree: true });
+      });
+    </script>
   </body>
 </html>
