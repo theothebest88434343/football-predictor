@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useFetch } from '../hooks/useFetch';
 import ClubBadge from '../components/ClubBadge';
-import { LEAGUES, getLeague } from '../utils/leagues.jsx';
+import { LEAGUES, getLeague, LeagueIcon } from '../utils/leagues.jsx';
 
 // ─── Team picker ─────────────────────────────────────────────────────────────
 // PL  → /api/teams (FPL data, ClubBadge SVGs)
@@ -119,7 +119,9 @@ function LeagueCard({ league, onClick }) {
         transition: 'border-color 0.15s',
       }}
     >
-      <span style={{ fontSize: 32, flexShrink: 0 }}>{league.emoji}</span>
+      <span style={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}>
+        <LeagueIcon league={league} size={32} />
+      </span>
       <div style={{ flex: 1 }}>
         <div style={{
           fontWeight: 700, fontSize: 15, color: 'var(--text)',

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect } from 'react';
+import { lazy, Suspense } from 'react';
 import { Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import BottomNav from './components/BottomNav';
 import NotificationBell from './components/NotificationBell';
@@ -22,7 +22,7 @@ function PageLoader() {
 }
 
 import LeagueSelector from './pages/LeagueSelector'; // eager: needed for onboarding
-import { getLeague } from './utils/leagues.jsx';
+import { getLeague, LeagueIcon } from './utils/leagues.jsx';
 
 // Forces a full remount of any league-scoped page when the leagueId changes,
 // so useState initialises fresh and no stale tab/team selections carry over.
@@ -58,7 +58,7 @@ function LeagueBadge() {
         letterSpacing: 0.5, flexShrink: 0,
       }}
     >
-      <span style={{ fontSize: 15 }}>{league.emoji}</span>
+      <LeagueIcon league={league} size={18} />
       <span>{league.short}</span>
     </button>
   );
@@ -67,11 +67,6 @@ function LeagueBadge() {
 // ─── App ──────────────────────────────────────────────────────────────────────
 
 export default function App() {
-  // Re-apply Twemoji after every React render so dynamic content gets parsed
-  useEffect(() => {
-    if (typeof window.applyTwemoji === 'function') window.applyTwemoji();
-  });
-
   return (
     <div className="app-shell">
       <header className="top-bar">
