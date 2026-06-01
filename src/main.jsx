@@ -7,7 +7,8 @@ import twemoji from 'twemoji';
 
 // ─── Twemoji: cross-platform emoji rendering ──────────────────────────────────
 // Applied on all platforms for consistent emoji rendering everywhere.
-function applyTwemoji() {
+// Uses MutationObserver so it catches emoji added dynamically by React.
+export function applyTwemoji() {
   twemoji.parse(document.body, {
     folder: 'svg',
     ext: '.svg',
@@ -16,11 +17,11 @@ function applyTwemoji() {
 }
 
 if (typeof window !== 'undefined') {
-  document.addEventListener('DOMContentLoaded', applyTwemoji);
+  // Run immediately in case DOM is already ready
+  applyTwemoji();
+  // Also observe all future DOM mutations (React renders)
   const observer = new MutationObserver(applyTwemoji);
-  document.addEventListener('DOMContentLoaded', () => {
-    observer.observe(document.body, { childList: true, subtree: true });
-  });
+  observer.observe(document.documentElement, { childList: true, subtree: true });
 }
 
 // ─── Global ErrorBoundary ─────────────────────────────────────────────────────
