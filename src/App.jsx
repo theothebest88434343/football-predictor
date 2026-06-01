@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import BottomNav from './components/BottomNav';
 import NotificationBell from './components/NotificationBell';
@@ -67,6 +67,11 @@ function LeagueBadge() {
 // ─── App ──────────────────────────────────────────────────────────────────────
 
 export default function App() {
+  // Re-apply Twemoji after every React render so dynamic content gets parsed
+  useEffect(() => {
+    if (typeof window.applyTwemoji === 'function') window.applyTwemoji();
+  });
+
   return (
     <div className="app-shell">
       <header className="top-bar">

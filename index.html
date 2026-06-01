@@ -19,7 +19,7 @@
     <!-- Twemoji: cross-platform emoji rendering -->
     <script src="https://cdn.jsdelivr.net/npm/twemoji@14.0.2/dist/twemoji.min.js" crossorigin="anonymous"></script>
     <script>
-      function applyTwemoji() {
+      window.applyTwemoji = function applyTwemoji() {
         if (typeof twemoji === 'undefined') return;
         twemoji.parse(document.body, {
           folder: 'svg',
