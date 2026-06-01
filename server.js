@@ -5058,6 +5058,198 @@ async function preFillPredictions() {
   }
 }
 
+// ─── Agent 2: Daily accuracy snapshot ────────────────────────────────────────
+// Runs every morning at 9am (after season rollover at 8am).
+// Calculates accuracy for all 9 competitions and upserts a row per league
+// into accuracy_snapshots. Agent 3 (model tuning) reads this table to detect
+// where Dixon-Coles is underperforming over time.
+
+async function snapshotAccuracy() {
+  if (!supabase || !currentSeason?.id) return;
+
+  const allLeagues = ['premier-league', ...Object.keys(FD_CODE)];
+  const today      = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  const season     = currentSeason.code ?? db.computeSeasonCode();
+
+  console.log(`[AccuracySnapshot] Running daily snapshot for ${today} — ${allLeagues.length} leagues`);
+
+  for (const league of allLeagues) {
+    try {
+      const isPL   = league === 'premier-league';
+      const rawRows = await db.getSettledPredictions(supabase, currentSeason.id, league);
+
+      const raw = rawRows.filter(p => {
+        if (!p.prediction || !p.external_round_id) return false;
+        if (isPL) return p.external_round_id !== '1';
+        return true;
+      }).map(db.rowToCamel);
+
+      // Dedup
+      const seen = new Map();
+      for (const p of raw) {
+        const key = `${p.league ?? 'pl'}_${p.fixtureId}`;
+        const ex  = seen.get(key);
+        if (!ex || new Date(p.trackedAt) > new Date(ex.trackedAt)) seen.set(key, p);
+      }
+      const completed = [...seen.values()];
+      const total     = completed.length;
+      if (total === 0) continue;
+
+      // Score-based and prob-argmax accuracy
+      let scoreCorrect = 0, scoreExact = 0, probCorrect = 0;
+      const calibInputs = [];
+
+      for (const p of completed) {
+        const { homeGoals, awayGoals } = p.result;
+        const actual    = homeGoals > awayGoals ? 'H' : homeGoals < awayGoals ? 'A' : 'D';
+        const normalised = p.prediction.predictedScore ? String(p.prediction.predictedScore).replace(/–/g, '-') : null;
+        const isExact   = normalised === `${homeGoals}-${awayGoals}`;
+        const scoreOut  = outcomeFromScore(normalised);
+        if (isExact)                              scoreExact++;
+        if (scoreOut !== null && scoreOut === actual) scoreCorrect++;
+        const probOut   = probArgmax(p.prediction);
+        if (probOut !== null && probOut === actual)   probCorrect++;
+        calibInputs.push({ predicted: p.prediction, actual });
+      }
+
+      const row = {
+        date:          today,
+        league,
+        season,
+        total_games:   total,
+        score_correct: scoreCorrect,
+        score_exact:   scoreExact,
+        prob_correct:  probCorrect,
+        score_rate:    scoreCorrect / total,
+        prob_rate:     probCorrect  / total,
+        brier:         brierScore(calibInputs),
+        log_loss:      logLoss(calibInputs),
+      };
+
+      const { error } = await supabase
+        .from('accuracy_snapshots')
+        .upsert(row, { onConflict: 'date,league,season' });
+
+      if (error) console.warn(`[AccuracySnapshot] ${league}:`, error.message);
+      else       console.log(`[AccuracySnapshot] ${league}: ${scoreCorrect}/${total} (${(row.score_rate * 100).toFixed(1)}%)`);
+
+    } catch (err) {
+      console.error(`[AccuracySnapshot] ${league} failed:`, err.message);
+    }
+  }
+}
+
+// ─── Agent 3: Model tuning report ────────────────────────────────────────────
+// Runs daily at 10am (after agent 2's 9am snapshot).
+// Reads accuracy_snapshots for all leagues, detects accuracy drift over a
+// 14-day window, and generates a plain-English Groq insight per league.
+// Skips leagues with fewer than 7 snapshots — not enough data for trend detection.
+// Write-only to tuning_reports; read-only everywhere else.
+
+async function runModelTuningAgent() {
+  if (!supabase || !currentSeason?.id) return;
+  if (!groq) { console.warn('[TuningAgent] Groq not configured — skipping'); return; }
+
+  const allLeagues = ['premier-league', ...Object.keys(FD_CODE)];
+  const today      = new Date().toISOString().slice(0, 10);
+  const season     = currentSeason.code ?? db.computeSeasonCode();
+
+  console.log(`[TuningAgent] Running for ${today}`);
+
+  for (const league of allLeagues) {
+    try {
+      // ── Fetch all snapshots for this league this season ──────────────────
+      const { data: snapshots, error: fetchErr } = await supabase
+        .from('accuracy_snapshots')
+        .select('date, score_rate, prob_rate, brier, log_loss, total_games')
+        .eq('league', league)
+        .eq('season', season)
+        .order('date', { ascending: true });
+
+      if (fetchErr) { console.warn(`[TuningAgent] ${league} fetch error:`, fetchErr.message); continue; }
+      if (!snapshots || snapshots.length < 7) {
+        console.log(`[TuningAgent] ${league}: only ${snapshots?.length ?? 0} snapshots — skipping`);
+        continue;
+      }
+
+      // ── Last 14 snapshots ────────────────────────────────────────────────
+      const window    = snapshots.slice(-14);
+      const windowLen = window.length;
+      const totalGamesInWindow = window.reduce((s, r) => s + (r.total_games ?? 0), 0);
+
+      // Use first and last snapshot in window for trend comparison
+      const first = window[0];
+      const last  = window[windowLen - 1];
+
+      const scoreRateStart = first.score_rate ?? 0;
+      const scoreRateEnd   = last.score_rate  ?? 0;
+      const brierStart     = first.brier       ?? 0;
+      const brierEnd       = last.brier        ?? 0;
+
+      // ── Flag detection ───────────────────────────────────────────────────
+      const scoreRateDrop      = (scoreRateStart - scoreRateEnd) > 0.05;  // dropped >5%
+      const brierTrendingWorse = (brierEnd - brierStart) > 0.01;           // brier increased
+
+      const flags = {
+        score_rate_drop:      scoreRateDrop,
+        brier_trending_worse: brierTrendingWorse,
+        score_rate_start:     Math.round(scoreRateStart * 1000) / 1000,
+        score_rate_end:       Math.round(scoreRateEnd   * 1000) / 1000,
+        brier_start:          Math.round(brierStart     * 1000) / 1000,
+        brier_end:            Math.round(brierEnd       * 1000) / 1000,
+      };
+
+      const severity = (scoreRateDrop && brierTrendingWorse) ? 'critical'
+                     : (scoreRateDrop || brierTrendingWorse) ? 'warning'
+                     : 'ok';
+
+      // ── Groq report ──────────────────────────────────────────────────────
+      const systemPrompt = `You are a football prediction model analyst. Write a concise, specific diagnostic insight about model performance. Under 120 words. No filler. Reference the exact numbers provided.`;
+
+      const userPrompt = `League: ${league} | Season: ${season} | Window: last ${windowLen} days | Games analysed: ${totalGamesInWindow}
+
+Score accuracy: ${(scoreRateStart * 100).toFixed(1)}% → ${(scoreRateEnd * 100).toFixed(1)}% (${scoreRateDrop ? `dropped ${((scoreRateStart - scoreRateEnd) * 100).toFixed(1)}%` : 'stable'})
+Brier score: ${brierStart.toFixed(3)} → ${brierEnd.toFixed(3)} (${brierTrendingWorse ? 'worsening — probabilities less calibrated' : 'stable or improving'})
+Severity: ${severity}
+
+Write a plain-English diagnostic. If severity is ok, confirm the model is performing well. If warning or critical, explain what the numbers suggest about where the model may be underperforming and what patterns to investigate (e.g. home advantage weighting, low-scoring game correction, form recency).`;
+
+      const rawReport = await groqChat([
+        { role: 'system', content: systemPrompt },
+        { role: 'user',   content: userPrompt },
+      ], 300);
+
+      // ── Validate Groq response ───────────────────────────────────────────
+      if (!rawReport || typeof rawReport !== 'string' || rawReport.trim().length < 10) {
+        console.warn(`[TuningAgent] ${league}: Groq returned empty/malformed response — skipping insert`);
+        continue;
+      }
+
+      // ── Upsert into tuning_reports ───────────────────────────────────────
+      const { error: upsertErr } = await supabase
+        .from('tuning_reports')
+        .upsert({
+          date:                  today,
+          league,
+          season,
+          snapshot_window:       windowLen,
+          total_games_in_window: totalGamesInWindow,
+          flags,
+          report:                rawReport.trim(),
+          severity,
+        }, { onConflict: 'date,league,season' });
+
+      if (upsertErr) console.warn(`[TuningAgent] ${league} upsert error:`, upsertErr.message);
+      else           console.log(`[TuningAgent] ${league}: ${severity} — report saved`);
+
+    } catch (err) {
+      console.error(`[TuningAgent] ${league} failed:`, err.message);
+    }
+  }
+
+  console.log(`[TuningAgent] Done for ${today}`);
+}
+
 // ─── Cron jobs ────────────────────────────────────────────────────────────────
 
 cron.schedule('0 * * * *',    autoFillResults);            // every hour — PL
@@ -5065,7 +5257,9 @@ cron.schedule('30 * * * *',   autoFillFdResults);          // every hour, stagge
 cron.schedule('45 * * * *',   preFillPredictions);         // every hour — pre-generate all leagues
 cron.schedule('*/15 * * * *', checkKickoffNotifications);  // every 15 min
 cron.schedule('0 8 * * *',    checkSeasonRollover);        // daily at 8am
-cron.schedule('0 6 * * *',    initDynamicElo);              // daily at 6am — refresh WC ELO from martj42
+cron.schedule('0 6 * * *',    initDynamicElo);             // daily at 6am — refresh WC ELO from martj42
+cron.schedule('0 9 * * *',    snapshotAccuracy);           // daily at 9am — agent 2: accuracy snapshot
+cron.schedule('0 10 * * *',   runModelTuningAgent);        // daily at 10am — agent 3: model tuning
 
 // ─── Production static + SPA fallback ────────────────────────────────────────
 

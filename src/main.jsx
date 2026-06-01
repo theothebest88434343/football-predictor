@@ -3,6 +3,28 @@ import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import App from './App';
 import './index.css';
+import twemoji from 'twemoji';
+
+// ─── Twemoji: cross-platform emoji rendering ──────────────────────────────────
+// Only applies on non-Apple platforms (Windows, Android, Linux).
+// Mac and iOS have native high-quality emoji — leave those untouched.
+const isMacOrIOS = /Mac|iPhone|iPad|iPod/.test(navigator.userAgent);
+
+function applyTwemoji() {
+  twemoji.parse(document.body, {
+    folder: 'svg',
+    ext: '.svg',
+    base: 'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/',
+  });
+}
+
+if (typeof window !== 'undefined' && !isMacOrIOS) {
+  document.addEventListener('DOMContentLoaded', applyTwemoji);
+  const observer = new MutationObserver(applyTwemoji);
+  document.addEventListener('DOMContentLoaded', () => {
+    observer.observe(document.body, { childList: true, subtree: true });
+  });
+}
 
 // ─── Global ErrorBoundary ─────────────────────────────────────────────────────
 // Catches any render-time React error and prevents a full white-screen crash.
