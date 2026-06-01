@@ -6,10 +6,7 @@ import './index.css';
 import twemoji from 'twemoji';
 
 // ─── Twemoji: cross-platform emoji rendering ──────────────────────────────────
-// Only applies on non-Apple platforms (Windows, Android, Linux).
-// Mac and iOS have native high-quality emoji — leave those untouched.
-const isMacOrIOS = /Mac|iPhone|iPad|iPod/.test(navigator.userAgent);
-
+// Applied on all platforms for consistent emoji rendering everywhere.
 function applyTwemoji() {
   twemoji.parse(document.body, {
     folder: 'svg',
@@ -18,7 +15,7 @@ function applyTwemoji() {
   });
 }
 
-if (typeof window !== 'undefined' && !isMacOrIOS) {
+if (typeof window !== 'undefined') {
   document.addEventListener('DOMContentLoaded', applyTwemoji);
   const observer = new MutationObserver(applyTwemoji);
   document.addEventListener('DOMContentLoaded', () => {
