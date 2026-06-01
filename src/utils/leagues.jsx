@@ -19,11 +19,14 @@ export function getLeague(leagueId) {
 }
 
 // ─── LeagueIcon ───────────────────────────────────────────────────────────────
-// Renders a flag image for leagues with a flagCode, falls back to emoji.
-// Works cross-platform including Windows which doesn't support flag emoji.
+// Mac/iOS: use native emoji (Apple renders them beautifully).
+// Everything else (Windows, Android, Linux): use flagcdn.com images.
+
+const isMacOrIOS = typeof navigator !== 'undefined' &&
+  /Mac|iPhone|iPad|iPod/.test(navigator.userAgent);
 
 export function LeagueIcon({ league, size = 24, style = {} }) {
-  if (league.flagCode) {
+  if (!isMacOrIOS && league.flagCode) {
     return (
       <img
         src={`https://flagcdn.com/w40/${league.flagCode}.png`}
