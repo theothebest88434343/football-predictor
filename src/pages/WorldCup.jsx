@@ -511,36 +511,59 @@ function MatchRow({ fixture }) {
         {live ? '🔴 LIVE' : played ? status : fmtKickoff(kickoff) || 'TBC'}
       </div>
 
-      {/* Teams + score */}
+      {/* Teams + score — strict 3-column layout so score is always centred */}
       <div style={{ flex: 1 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span style={{ fontWeight: 600, fontSize: 13, color: played ? outcomeColor(status, hGoals, aGoals, 'home') : 'inherit', display: 'flex', alignItems: 'center', gap: 4 }}>
-            <span>{flag(home)}</span>{home}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 64px 1fr', alignItems: 'center', gap: 4 }}>
+          {/* Home team — right-aligned */}
+          <span style={{
+            fontWeight: 600, fontSize: 13,
+            color: played ? outcomeColor(status, hGoals, aGoals, 'home') : 'var(--text)',
+            display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4,
+            overflow: 'hidden',
+          }}>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{home}</span>
+            <span style={{ flexShrink: 0 }}>{flag(home)}</span>
           </span>
 
-          {played ? (
-            <span style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 20, letterSpacing: 2, margin: '0 8px' }}>
-              {hGoals} – {aGoals}
-            </span>
-          ) : pred ? (
-            <span style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 16, letterSpacing: 2, margin: '0 8px', color: 'var(--gold)' }}>
-              {(pred.predictedScore ?? '?-?').replace('-', '–')}
-            </span>
-          ) : (
-            <span style={{ margin: '0 8px', color: 'var(--text-muted)', fontSize: 14 }}>vs</span>
-          )}
+          {/* Score / kickoff — always centred */}
+          <div style={{ textAlign: 'center' }}>
+            {played ? (
+              <span style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 20, letterSpacing: 2 }}>
+                {hGoals}–{aGoals}
+              </span>
+            ) : pred ? (
+              <span style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 16, letterSpacing: 1, color: 'var(--gold)' }}>
+                {(pred.predictedScore ?? '?-?').replace('-', '–')}
+              </span>
+            ) : (
+              <span style={{ color: 'var(--text-muted)', fontSize: 12, fontWeight: 600 }}>vs</span>
+            )}
+          </div>
 
-          <span style={{ fontWeight: 600, fontSize: 13, color: played ? outcomeColor(status, hGoals, aGoals, 'away') : 'inherit', display: 'flex', alignItems: 'center', gap: 4 }}>
-            {away}<span>{flag(away)}</span>
+          {/* Away team — left-aligned */}
+          <span style={{
+            fontWeight: 600, fontSize: 13,
+            color: played ? outcomeColor(status, hGoals, aGoals, 'away') : 'var(--text)',
+            display: 'flex', alignItems: 'center', gap: 4,
+            overflow: 'hidden',
+          }}>
+            <span style={{ flexShrink: 0 }}>{flag(away)}</span>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{away}</span>
           </span>
         </div>
 
-        {/* Prediction probabilities for upcoming matches */}
+        {/* Prediction probabilities — centred under score column */}
         {pred && !played && !live && (
-          <div style={{ marginTop: 4, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            <span className="chip chip-gold"  style={{ fontSize: 10, padding: '1px 8px' }}>{pct(pred.homeWin)} {home.split(' ')[0]}</span>
-            <span className="chip chip-muted" style={{ fontSize: 10, padding: '1px 8px' }}>{pct(pred.draw)} Draw</span>
-            <span className="chip chip-muted" style={{ fontSize: 10, padding: '1px 8px' }}>{pct(pred.awayWin)} {away.split(' ')[0]}</span>
+          <div style={{ marginTop: 5, display: 'grid', gridTemplateColumns: '1fr 64px 1fr', gap: 4, alignItems: 'center' }}>
+            <div style={{ textAlign: 'right' }}>
+              <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--gold)' }}>{pct(pred.homeWin)}</span>
+            </div>
+            <div style={{ textAlign: 'center' }}>
+              <span style={{ fontSize: 9, color: 'var(--text-muted)', fontWeight: 600 }}>{pct(pred.draw)} D</span>
+            </div>
+            <div style={{ textAlign: 'left' }}>
+              <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)' }}>{pct(pred.awayWin)}</span>
+            </div>
           </div>
         )}
 
@@ -633,8 +656,10 @@ function GroupStageView({ data }) {
         const progress = total ? Math.round((played / total) * 100) : 0;
         const done     = progress === 100;
 
+        const groupColor = GROUP_COLORS[letter] ?? 'var(--gold)';
+
         return (
-          <div key={letter} className="card" style={{ padding: 0, overflow: 'hidden' }}>
+          <div key={letter} className="card" style={{ padding: 0, overflow: 'hidden', borderLeft: `3px solid ${groupColor}` }}>
             {/* Group header */}
             <button
               onClick={() => setExpandedGroup(isOpen ? null : letter)}
@@ -642,39 +667,63 @@ function GroupStageView({ data }) {
               aria-label={`${isOpen ? 'Collapse' : 'Expand'} Group ${letter}`}
               style={{
                 width:       '100%',
-                background:  'transparent',
+                background:  isOpen ? `${groupColor}0d` : 'transparent',
                 border:      'none',
                 padding:     '12px 14px',
                 display:     'flex',
                 alignItems:  'center',
                 cursor:      'pointer',
                 gap:         10,
+                transition:  'background 0.15s',
               }}
             >
+              {/* Group letter badge */}
               <div style={{
-                width:      32, height: 32,
+                width:      34, height: 34,
                 borderRadius: 8,
-                background:  'var(--surface2)',
+                background:  `${groupColor}22`,
+                border:      `1.5px solid ${groupColor}55`,
                 display:     'flex', alignItems: 'center', justifyContent: 'center',
                 fontFamily:  'Bebas Neue, sans-serif',
-                fontSize:    18,
-                color:       'var(--gold)',
+                fontSize:    20,
+                color:       groupColor,
                 flexShrink:  0,
               }} aria-hidden>
                 {letter}
               </div>
-              <div style={{ flex: 1, textAlign: 'left' }}>
-                <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--text-primary)' }}>
+
+              {/* Team names + flags */}
+              <div style={{ flex: 1, textAlign: 'left', minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 12, color: groupColor, letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 4 }}>
                   Group {letter}
                 </div>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
-                  {teams.join(' · ')}
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {teams.map((t, ti) => (
+                    <span key={t} style={{
+                      fontSize: 11, fontWeight: 600,
+                      color: played > 0 ? (standingRows.findIndex(r => r.team === t) < 2 ? 'var(--text)' : 'var(--text-muted)') : 'var(--text-muted)',
+                      display: 'flex', alignItems: 'center', gap: 3,
+                    }}>
+                      <span style={{ fontSize: 13 }}>{flag(t)}</span>
+                      <span style={{ fontSize: 10 }}>{t.split(' ')[0]}</span>
+                    </span>
+                  ))}
                 </div>
               </div>
-              <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                <div style={{ fontSize: 11, color: done ? 'var(--green)' : 'var(--text-muted)', fontWeight: 600 }}>
-                  {done ? '✓ Complete' : `${played}/${total}`}
+
+              {/* Progress + chevron */}
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flexShrink: 0 }}>
+                <div style={{
+                  fontSize: 11, fontWeight: 700,
+                  color: done ? 'var(--green)' : played > 0 ? groupColor : 'var(--text-muted)',
+                }}>
+                  {done ? '✓' : `${played}/${total}`}
                 </div>
+                {total > 0 && !done && (
+                  <div style={{ width: 36, height: 3, borderRadius: 2, background: 'rgba(255,255,255,0.08)', overflow: 'hidden' }}>
+                    <div style={{ width: `${(played / total) * 100}%`, height: '100%', borderRadius: 2, background: groupColor }} />
+                  </div>
+                )}
               </div>
               <div style={{
                 fontSize: 14, color: 'var(--text-muted)',
@@ -684,19 +733,17 @@ function GroupStageView({ data }) {
             </button>
 
             {isOpen && (
-              <div style={{ padding: '0 14px 14px' }}>
+              <div style={{ padding: '0 14px 14px', borderTop: `1px solid ${groupColor}33` }}>
                 <StandingsTable rows={standingRows} />
                 {groupMatches.length > 0 && (
                   <div style={{ marginTop: 12 }}>
                     <div style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 600, letterSpacing: 0.5, marginBottom: 4 }}>
                       MATCHES
                     </div>
-                    {groupMatches.map((f, i) => <MatchRow key={f.id ?? f.fixture?.id ?? i} fixture={f} />)}
-                  </div>
-                )}
-                {groupMatches.length === 0 && (
-                  <div style={{ marginTop: 12, color: 'var(--text-muted)', fontSize: 12 }}>
-                    Matches begin June 11, 2026.
+                    {groupMatches
+                      .slice()
+                      .sort((a, b) => new Date(a.date ?? a.fixture?.date ?? 0) - new Date(b.date ?? b.fixture?.date ?? 0))
+                      .map((f, i) => <MatchRow key={f.id ?? f.fixture?.id ?? i} fixture={f} />)}
                   </div>
                 )}
               </div>
@@ -2924,15 +2971,9 @@ export default function WorldCup() {
         </div>
       </div>
 
-      {/* Single tab bar — adapts between pre-tournament and live */}
+      {/* Single tab bar — same tabs in both pre-tournament and live */}
       <div style={{ display: 'flex', gap: 6, marginBottom: 12, overflowX: 'auto', WebkitOverflowScrolling: 'touch', paddingBottom: 2 }}>
-        {(hasApiData ? [
-          { id: 'groups',   label: 'Groups' },
-          { id: 'bracket',  label: 'Bracket' },
-          { id: 'knockout', label: 'Knockout', disabled: !isKnockout && !data?.knockoutFixtures?.length },
-          { id: 'accuracy', label: '📊 Accuracy' },
-          { id: 'rankings', label: '📈 Rankings' },
-        ] : [
+        {([
           { id: 'groups',   label: 'Groups' },
           { id: 'table',    label: 'Table' },
           { id: 'bracket',  label: 'Bracket' },
@@ -2940,6 +2981,7 @@ export default function WorldCup() {
           { id: 'odds',     label: '🏆 Odds' },
           { id: 'rankings', label: '📈 Rankings' },
           { id: 'accuracy', label: '📊 Stats' },
+          ...(hasApiData && (isKnockout || data?.knockoutFixtures?.length) ? [{ id: 'knockout', label: 'Knockout' }] : []),
         ]).map(({ id, label, disabled }) => (
           <button
             key={id}
@@ -2970,22 +3012,20 @@ export default function WorldCup() {
         <EloRankingsView onTeamClick={setSelectedTeam} />
       ) : view === 'bracket' ? (
         <BracketView data={dataFallback} />
-      ) : !hasApiData && view === 'table' ? (
+      ) : view === 'table' ? (
         <PredictedTableView data={dataCalibrated} onTeamClick={setSelectedTeam} />
-      ) : !hasApiData && view === 'insights' ? (
-        <InsightsView data={dataFallback} onTeamClick={setSelectedTeam} />
-      ) : !hasApiData && view === 'odds' ? (
-        <WinnerOddsView data={dataFallback} boostedReach={boostedReach} boosts={boosts} toggleBoost={toggleBoost} onTeamClick={setSelectedTeam} />
-      ) : !hasApiData && view === 'accuracy' ? (
-        <WCStatsView data={dataFallback} />
-      ) : !hasApiData ? (
-        <PreTournamentView data={dataPreTournament} onTeamClick={setSelectedTeam} />
-      ) : view === 'groups' ? (
-        <GroupStageView data={data} />
+      ) : view === 'insights' ? (
+        <InsightsView data={hasApiData ? dataFallback : dataFallback} onTeamClick={setSelectedTeam} />
+      ) : view === 'odds' ? (
+        <WinnerOddsView data={hasApiData ? dataCalibrated : dataFallback} boostedReach={boostedReach} boosts={boosts} toggleBoost={toggleBoost} onTeamClick={setSelectedTeam} />
       ) : view === 'accuracy' ? (
-        <WCStatsView data={data} />
-      ) : (
+        <WCStatsView data={hasApiData ? data : dataFallback} />
+      ) : view === 'knockout' ? (
         <KnockoutView data={data} />
+      ) : hasApiData ? (
+        <GroupStageView data={data} />
+      ) : (
+        <PreTournamentView data={dataPreTournament} onTeamClick={setSelectedTeam} />
       )}
 
       {/* Team detail modal — uses calibrated reach so Path to Final bars match the Table/Odds tabs */}

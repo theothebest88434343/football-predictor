@@ -3025,6 +3025,19 @@ async function fetchESPN(url, cacheKey) {
   return res.data;
 }
 
+// ESPN → canonical WC_GROUPS name mapping.
+// ESPN uses different country name conventions from our schedule/model data.
+const ESPN_NAME_MAP = {
+  'Czechia':             'Czech Republic',
+  'Bosnia-Herzegovina':  'Bosnia & Herzegovina',
+  'Cape Verde':          'Cabo Verde',
+  'Congo DR':            'DR Congo',
+  'Ivory Coast':         "Côte d'Ivoire",
+  'Türkiye':             'Turkey',
+  'United States':       'United States', // keep as-is (matches WC_GROUPS)
+};
+function normESPN(name) { return ESPN_NAME_MAP[name] ?? name; }
+
 // Parse ESPN scoreboard events into a normalised fixture list
 function parseESPNFixtures(data) {
   const events = data?.events ?? [];
@@ -3044,8 +3057,8 @@ function parseESPNFixtures(data) {
       status:   stateStr,
       detail,
       teams: {
-        home: { name: home?.team?.displayName ?? home?.team?.name ?? '?', id: home?.team?.id },
-        away: { name: away?.team?.displayName ?? away?.team?.name ?? '?', id: away?.team?.id },
+        home: { name: normESPN(home?.team?.displayName ?? home?.team?.name ?? '?'), id: home?.team?.id },
+        away: { name: normESPN(away?.team?.displayName ?? away?.team?.name ?? '?'), id: away?.team?.id },
       },
       goals: {
         home: stateStr === 'post' ? Number(home?.score ?? 0) : null,
@@ -3073,7 +3086,7 @@ function parseESPNStandings(data) {
 
     groups[letter] = groups[letter] ?? [];
     groups[letter].push({
-      team:   entry.team?.displayName ?? entry.team?.name ?? '?',
+      team:   normESPN(entry.team?.displayName ?? entry.team?.name ?? '?'),
       teamId: entry.team?.id,
       played: stat('gamesPlayed'),
       won:    stat('wins'),
@@ -3953,6 +3966,41 @@ app.get('/api/wc/tournament', async (req, res) => {
       });
     }
 
+    // Supplement ESPN groupFixtures with WC_SCHEDULE entries for matches not yet
+    // in the ESPN feed (upcoming fixtures). ESPN scoreboard only covers a narrow
+    // time window so future group games won't appear until matchday.
+    const espnMatchKeys = new Set(
+      groupFixtures.map(f => {
+        const h = (f.teams?.home?.name ?? '').toLowerCase();
+        const a = (f.teams?.away?.name ?? '').toLowerCase();
+        return `${h}|${a}`;
+      })
+    );
+    const scheduleOnlyFixtures = WC_SCHEDULE
+      .filter(s => {
+        const fwd = `${s.home.toLowerCase()}|${s.away.toLowerCase()}`;
+        const rev = `${s.away.toLowerCase()}|${s.home.toLowerCase()}`;
+        return !espnMatchKeys.has(fwd) && !espnMatchKeys.has(rev);
+      })
+      .map(s => {
+        const prediction = wcPoisson(s.home, s.away);
+        return {
+          id:            `schedule-${s.home.replace(/\s/g,'')}-${s.away.replace(/\s/g,'')}`,
+          round:         `Group Stage - Group ${s.group}`,
+          date:          s.kickoff,
+          _statusShort:  'NS',
+          teams:         { home: { name: s.home }, away: { name: s.away } },
+          goals:         { home: null, away: null },
+          _prediction:   prediction,
+          _venue:        s.venue,
+          _city:         s.city,
+          _group:        s.group,
+          _md:           s.md,
+        };
+      });
+
+    const allGroupFixtures = [...attachPrePreds(groupFixtures), ...scheduleOnlyFixtures];
+
     // Compute live tournament reach — completed groups use actual standings,
     // incomplete groups are simulated. This keeps Odds tab and Team Detail
     // Modal accurate throughout the tournament.
@@ -3961,10 +4009,12 @@ app.get('/api/wc/tournament', async (req, res) => {
     res.json({
       phase,
       groups,
-      groupFixtures:          attachPrePreds(groupFixtures),
+      groupFixtures:          allGroupFixtures,
       knockoutFixtures:       enrichWithPredictions(knockoutFixtures),
       hardcodedGroups:        WC_GROUPS,
       wcSchedule:             WC_SCHEDULE,
+      groupMatchPredictions:  prePreds?.groupMatchPredictions ?? {},
+      groupPredictedStandings: prePreds?.groupPredictedStandings ?? {},
       preTournamentSavedAt:   prePreds?.savedAt ?? null,
       tournamentReach:        liveTournamentReach,
       goldenBoot:             computeGoldenBoot(liveTournamentReach),
