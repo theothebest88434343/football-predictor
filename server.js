@@ -3597,22 +3597,24 @@ function getH2HData(results, homeAlias, awayAlias) {
 // Squads based on current international form — updated once official 2026 squads announced.
 const WC_STRIKERS = [
   // Group A — Mexico, South Africa, South Korea, Czech Republic
-  { name: 'Santiago Giménez',   team: 'Mexico',                share: 0.30 },
+  { name: 'Raúl Jiménez',       team: 'Mexico',                share: 0.28 },
   { name: 'Son Heung-min',      team: 'South Korea',           share: 0.28 },
   { name: 'Patrik Schick',      team: 'Czech Republic',        share: 0.32 },
+  { name: 'Lyle Foster',        team: 'South Africa',          share: 0.26 },
   // Group B — Canada, Bosnia & Herzegovina, Qatar, Switzerland
   { name: 'Jonathan David',     team: 'Canada',                share: 0.30 },
   { name: 'Edin Džeko',         team: 'Bosnia & Herzegovina',  share: 0.28 },
   { name: 'Breel Embolo',       team: 'Switzerland',           share: 0.30 },
+  { name: 'Akram Afif',         team: 'Qatar',                 share: 0.30 },
   // Group C — Brazil, Morocco, Haiti, Scotland
-  { name: 'Vinicius Jr.',       team: 'Brazil',                share: 0.27 },
-  { name: 'Rodrygo',            team: 'Brazil',                share: 0.18 },
-  { name: 'Youssef En-Nesyri',  team: 'Morocco',               share: 0.30 },
+  { name: 'Vinicius Junior',    team: 'Brazil',                share: 0.27 },
+  { name: 'Raphinha',           team: 'Brazil',                share: 0.16 },
+  { name: 'Ayoub El Kaabi',     team: 'Morocco',               share: 0.30 },
   // Group D — United States, Paraguay, Australia, Turkey
   { name: 'Christian Pulisic',  team: 'United States',         share: 0.24 },
   { name: 'Mathew Leckie',      team: 'Australia',             share: 0.24 },
-  { name: 'Arda Güler',         team: 'Turkey',                share: 0.26 },
-  { name: 'Enes Ünal',          team: 'Turkey',                share: 0.20 },
+  { name: 'Kenan Yıldız',       team: 'Turkey',                share: 0.26 },
+  { name: 'Yunus Akgün',        team: 'Turkey',                share: 0.18 },
   // Group E — Germany, Curaçao, Côte d'Ivoire, Ecuador
   { name: 'Kai Havertz',        team: 'Germany',               share: 0.26 },
   { name: 'Florian Wirtz',      team: 'Germany',               share: 0.18 },
@@ -3628,30 +3630,31 @@ const WC_STRIKERS = [
   { name: 'Mehdi Taremi',       team: 'Iran',                  share: 0.32 },
   { name: 'Chris Wood',         team: 'New Zealand',           share: 0.40 },
   // Group H — Spain, Cabo Verde, Saudi Arabia, Uruguay
-  { name: 'Álvaro Morata',      team: 'Spain',                 share: 0.24 },
-  { name: 'Mikel Oyarzabal',    team: 'Spain',                 share: 0.18 },
+  { name: 'Lamine Yamal',       team: 'Spain',                 share: 0.26 },
+  { name: 'Mikel Oyarzabal',    team: 'Spain',                 share: 0.20 },
   { name: 'Darwin Núñez',       team: 'Uruguay',               share: 0.30 },
   { name: 'Salem Al-Dawsari',   team: 'Saudi Arabia',          share: 0.28 },
   // Group I — France, Senegal, Iraq, Norway
   { name: 'Kylian Mbappé',      team: 'France',                share: 0.40 },
-  { name: 'Antoine Griezmann',  team: 'France',                share: 0.18 },
-  { name: 'Sadio Mané',         team: 'Senegal',               share: 0.28 },
-  { name: 'Ismaila Sarr',       team: 'Senegal',               share: 0.20 },
+  { name: 'Ousmane Dembélé',    team: 'France',                share: 0.20 },
+  { name: 'Ismaïla Sarr',       team: 'Senegal',               share: 0.28 },
   { name: 'Erling Haaland',     team: 'Norway',                share: 0.42 },
   // Group J — Argentina, Algeria, Austria, Jordan
-  { name: 'Lautaro Martínez',   team: 'Argentina',             share: 0.28 },
-  { name: 'Julián Álvarez',     team: 'Argentina',             share: 0.20 },
+  { name: 'Julián Álvarez',     team: 'Argentina',             share: 0.28 },
+  { name: 'Nicolás González',   team: 'Argentina',             share: 0.18 },
   { name: 'Riyad Mahrez',       team: 'Algeria',               share: 0.30 },
+  { name: 'Marko Arnautovic',   team: 'Austria',               share: 0.26 },
   // Group K — Portugal, DR Congo, Uzbekistan, Colombia
   { name: 'Cristiano Ronaldo',  team: 'Portugal',              share: 0.30 },
-  { name: 'Gonçalo Ramos',      team: 'Portugal',              share: 0.22 },
+  { name: 'Rafael Leão',        team: 'Portugal',              share: 0.22 },
   { name: 'Eldor Shomurodov',   team: 'Uzbekistan',            share: 0.30 },
   { name: 'Luis Díaz',          team: 'Colombia',              share: 0.24 },
+  { name: 'Yoane Wissa',        team: 'DR Congo',              share: 0.28 },
   // Group L — England, Croatia, Ghana, Panama
   { name: 'Harry Kane',         team: 'England',               share: 0.33 },
   { name: 'Bukayo Saka',        team: 'England',               share: 0.18 },
   { name: 'Andrej Kramarić',    team: 'Croatia',               share: 0.26 },
-  { name: 'Mohammed Kudus',     team: 'Ghana',                 share: 0.30 },
+  { name: 'Antoine Semenyo',    team: 'Ghana',                 share: 0.28 },
   { name: 'Ismael Díaz',        team: 'Panama',                share: 0.34 },
 ];
 
