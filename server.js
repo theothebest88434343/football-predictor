@@ -3931,20 +3931,50 @@ app.get('/api/wc/tournament', async (req, res) => {
   }
 
   try {
-    const [scoreboardData, standingsData] = await Promise.allSettled([
+    // Build list of past matchdays we need to back-fill.
+    // ESPN scoreboard only returns today's/upcoming fixtures — completed games
+    // from previous days disappear. Fetch each past date individually.
+    const today    = new Date();
+    const pastDates = [];
+    const cursor   = new Date(WC_START);
+    cursor.setUTCHours(0, 0, 0, 0);
+    while (cursor < today) {
+      const ymd = cursor.toISOString().slice(0, 10).replace(/-/g, '');
+      pastDates.push(ymd);
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
+    }
+
+    // Fetch today's scoreboard + standings + all past matchday scoreboards in parallel
+    const [scoreboardData, standingsData, ...pastResults] = await Promise.allSettled([
       fetchESPN(ESPN_SCOREBOARD, 'wc_scoreboard'),
       fetchESPN(ESPN_STANDINGS,  'wc_standings'),
+      ...pastDates.map(ymd => fetchESPN(`${ESPN_SCOREBOARD}?dates=${ymd}`, `wc_scoreboard_${ymd}`)),
     ]);
 
-    const fixtures = scoreboardData.status === 'fulfilled'
-      ? parseESPNFixtures(scoreboardData.value)
-      : [];
+    // Merge all fixtures — past completed results take precedence, dedup by event id
+    const seenIds  = new Set();
+    const allFixtures = [];
+    // Past dates first (oldest → newest) so today's live status overwrites if same id
+    for (const result of [...pastResults, scoreboardData]) {
+      if (result.status !== 'fulfilled') continue;
+      for (const f of parseESPNFixtures(result.value)) {
+        if (!seenIds.has(f.id)) { seenIds.add(f.id); allFixtures.push(f); }
+      }
+    }
+    const fixtures = allFixtures;
 
     const groups = standingsData.status === 'fulfilled'
       ? parseESPNStandings(standingsData.value)
       : {};
 
-    const phase            = wcTournamentPhase(fixtures);
+    // Derive phase — use fixture statuses first, fall back to standings if scoreboard
+    // only returned upcoming games (ESPN drops completed games after ~24h).
+    let phase = wcTournamentPhase(fixtures);
+    if (phase === 'PRE_TOURNAMENT') {
+      const anyPlayed = Object.values(groups).some(rows => rows.some(r => r.played > 0));
+      if (anyPlayed) phase = 'GROUP_STAGE';
+    }
+
     const groupFixtures    = fixtures.filter(f => (f.round ?? '').toLowerCase().includes('group'));
     const knockoutFixtures = fixtures.filter(f => !(f.round ?? '').toLowerCase().includes('group'));
     const hasLiveData      = fixtures.length > 0 || Object.keys(groups).length > 0;
