@@ -1627,31 +1627,40 @@ function InsightsView({ data, onTeamClick }) {
 function WCStatsView({ data }) {
   const { wcSchedule = [], groupMatchPredictions = {}, groupFixtures = [], knockoutFixtures = [] } = data;
 
-  // Build prediction lookup: "home|away" → prediction object
-  const predMap = {};
-  for (const preds of Object.values(groupMatchPredictions)) {
-    for (const p of preds) predMap[`${p.home}|${p.away}`] = p;
+  // Build fixture lookup from live groupFixtures — keyed by normalised "home|away".
+  // This ensures the Stats day-view shows the same predicted score as the Group card,
+  // since both now read from the same fixture._prediction / fixture._prePrediction.
+  const norm = s => (s ?? '').toLowerCase().replace(/[^a-z]/g, '');
+  const fixtureLookup = {};
+  for (const f of groupFixtures) {
+    const h = f.teams?.home?.name ?? '';
+    const a = f.teams?.away?.name ?? '';
+    fixtureLookup[`${norm(h)}|${norm(a)}`] = f;
+    fixtureLookup[`${norm(a)}|${norm(h)}`] = { ...f, _swapped: true };
   }
 
-  // Resolve prediction for a schedule entry — tries forward then reversed
+  // Resolve prediction for a schedule entry from the live fixture.
+  // For NS games: use _prediction (live model). For FT: use _prePrediction (frozen).
   const getPred = (home, away) => {
-    const fwd = predMap[`${home}|${away}`];
-    if (fwd) return { pred: fwd, reversed: false };
-    const rev = predMap[`${away}|${home}`];
-    if (rev) {
-      // Flip score and swap win probabilities
-      const [rh, ra] = (rev.predictedScore ?? '0-0').split('-');
-      return {
-        pred: {
-          ...rev,
-          predictedScore: `${ra}-${rh}`,
-          homeWin: rev.awayWin,
-          awayWin: rev.homeWin,
-        },
-        reversed: true,
+    const key = `${norm(home)}|${norm(away)}`;
+    const f = fixtureLookup[key];
+    if (!f) return { pred: null, reversed: false };
+    const swapped = !!f._swapped;
+    const status = f._statusShort ?? 'NS';
+    const played = ['FT','AET','PEN'].includes(status);
+    // For accuracy badge on completed games, prefer the frozen pre-tournament prediction.
+    // For upcoming games, use the live prediction.
+    let src = played ? (f._prePrediction ?? f._prediction) : f._prediction;
+    if (!src) return { pred: null, reversed: false };
+    if (swapped) {
+      src = {
+        ...src,
+        homeWin: src.awayWin,
+        awayWin: src.homeWin,
+        predictedScore: (src.predictedScore ?? '').split('-').reverse().join('-'),
       };
     }
-    return { pred: null, reversed: false };
+    return { pred: src, reversed: swapped };
   };
 
   // Build results lookup from played fixtures
