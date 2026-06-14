@@ -1,5 +1,5 @@
 'use strict';
-
+// v2026.06.14
 require('dotenv').config();
 
 process.on('unhandledRejection', (reason, promise) => {
