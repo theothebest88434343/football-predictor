@@ -3684,8 +3684,10 @@ function _loadPrePredFromDisk() {
       const raw = JSON.parse(fs.readFileSync(WC_PRE_PRED_FILE, 'utf8'));
       // Guard: discard disk cache if model version doesn't match.
       // (Same check Supabase loader applies — was previously missing here.)
-      if (raw.modelVersion !== WC_MODEL_VERSION) {
-        console.log(`[WC] Disk cache is model ${raw.modelVersion ?? 'unknown'}, current is ${WC_MODEL_VERSION} — discarding`);
+      // Only discard for version mismatch before the tournament starts.
+      // After kickoff the predictions are frozen — version drift must not cause recompute.
+      if (raw.modelVersion !== WC_MODEL_VERSION && Date.now() < WC_START.getTime()) {
+        console.log(`[WC] Disk cache is model ${raw.modelVersion ?? 'unknown'}, current is ${WC_MODEL_VERSION} — discarding (pre-tournament only)`);
         return null;
       }
       console.log(`[WC] Loaded frozen pre-tournament predictions from disk (saved ${raw.savedAt})`);
@@ -3706,9 +3708,12 @@ async function initWcPrePredictions() {
       .eq('id', 1)
       .maybeSingle();
     if (!error && data) {
-      // Discard stale cache if model version doesn't match
-      if (data.data?.modelVersion !== WC_MODEL_VERSION) {
-        console.log(`[WC] Supabase cache is model ${data.data?.modelVersion ?? 'unknown'}, current is ${WC_MODEL_VERSION} — discarding`);
+      // Once the tournament has started, NEVER discard stored predictions — they
+      // are frozen for accuracy tracking and must not be recomputed with live ELO.
+      // Only apply the version guard before the tournament begins.
+      const tournamentLive = Date.now() >= WC_START.getTime();
+      if (!tournamentLive && data.data?.modelVersion !== WC_MODEL_VERSION) {
+        console.log(`[WC] Supabase cache is model ${data.data?.modelVersion ?? 'unknown'}, current is ${WC_MODEL_VERSION} — discarding (pre-tournament only)`);
         return;
       }
       _wcPrePredCache = { savedAt: data.saved_at, ...data.data };
@@ -3810,7 +3815,13 @@ function getPrePredictions() {
   // Try disk first (local dev fallback — Supabase is loaded at startup via initWcPrePredictions)
   _wcPrePredCache = _loadPrePredFromDisk();
   if (_wcPrePredCache) return _wcPrePredCache;
-  // First ever call — compute, cache, and persist
+  // Once the tournament has started, do NOT recompute predictions — live ELO changes
+  // would corrupt the frozen accuracy baseline. Return null so callers handle gracefully.
+  if (Date.now() >= WC_START.getTime()) {
+    console.warn('[WC] No cached pre-tournament predictions found after tournament start — skipping recompute to protect accuracy baseline');
+    return null;
+  }
+  // Pre-tournament: compute, cache, and persist for the first time
   const built = _buildPrePredictions();
   _wcPrePredCache = { savedAt: new Date().toISOString(), modelVersion: WC_MODEL_VERSION, ...built };
   const { savedAt, ...dataToStore } = _wcPrePredCache;
@@ -3855,6 +3866,126 @@ function _buildPrePredLookup(groupMatchPredictions) {
       (an.includes(e.an) || e.an.includes(an))
     ) ?? null;
   };
+}
+
+// ── Knockout round frozen predictions ────────────────────────────────────────
+// Same "freeze at round-start, never recompute" logic as group stage.
+// Stored in wc_predictions with IDs 2-6 (id=1 is group stage).
+//
+// Round key → DB id mapping:
+//   r32=2  r16=3  qf=4  sf=5  final=6
+//
+// The first time we see fixtures for a knockout round we compute wcPoisson for
+// every matchup and lock the results. Subsequent calls (and server restarts)
+// load from Supabase so the numbers never drift with ELO updates mid-round.
+
+const KNOCKOUT_ROUND_IDS = { r32: 2, r16: 3, qf: 4, sf: 5, final: 6 };
+let   _wcKnockoutPredCache = {}; // { r32: { savedAt, predictions:[...] }, ... }
+
+function _getRoundKey(roundStr) {
+  const r = (roundStr ?? '').toLowerCase();
+  if (r.includes('32'))                              return 'r32';
+  if (r.includes('16'))                              return 'r16';
+  if (r.includes('quarter'))                         return 'qf';
+  if (r.includes('semi'))                            return 'sf';
+  if (r.includes('final') && !r.includes('semi') &&
+      !r.includes('quarter') && !r.includes('third')) return 'final';
+  return null;
+}
+
+async function initWcKnockoutPreds() {
+  if (!supabase) return;
+  try {
+    for (const [roundKey, id] of Object.entries(KNOCKOUT_ROUND_IDS)) {
+      const { data, error } = await supabase
+        .from('wc_predictions')
+        .select('data, saved_at')
+        .eq('id', id)
+        .maybeSingle();
+      if (!error && data?.data?.predictions?.length) {
+        _wcKnockoutPredCache[roundKey] = { savedAt: data.saved_at, ...data.data };
+        console.log(`[WC] Loaded frozen ${roundKey.toUpperCase()} predictions from Supabase (${data.data.predictions.length} matches)`);
+      }
+    }
+  } catch (err) { console.warn('[WC] initWcKnockoutPreds:', err.message); }
+}
+
+// Called the first time we enter a knockout round. Computes wcPoisson for every
+// fixture in that round (even ones already FT — we capture the best-available ELO
+// snapshot at the moment the round is first observed) and persists to Supabase.
+async function _freezeKnockoutRound(roundKey, allKnockoutFixtures) {
+  if (_wcKnockoutPredCache[roundKey]) return; // already frozen this round
+
+  const roundFixtures = allKnockoutFixtures.filter(f => {
+    const key = _getRoundKey(f.round);
+    return key === roundKey && f.teams?.home?.name && f.teams?.away?.name;
+  });
+  if (!roundFixtures.length) return;
+
+  const norm = s => (s ?? '').toLowerCase().replace(/[^a-z]/g, '');
+  const predictions = roundFixtures.map(f => ({
+    home: f.teams.home.name,
+    away: f.teams.away.name,
+    ...wcPoisson(f.teams.home.name, f.teams.away.name),
+  }));
+
+  const savedAt     = new Date().toISOString();
+  const dataToStore = { predictions, modelVersion: WC_MODEL_VERSION };
+  _wcKnockoutPredCache[roundKey] = { savedAt, ...dataToStore };
+  console.log(`[WC] Freezing ${roundKey.toUpperCase()} predictions for ${predictions.length} matches`);
+
+  if (supabase) {
+    const id = KNOCKOUT_ROUND_IDS[roundKey];
+    supabase.from('wc_predictions')
+      .upsert({ id, saved_at: savedAt, data: dataToStore }, { onConflict: 'id' })
+      .then(({ error }) => {
+        if (error) console.warn(`[WC] Supabase save ${roundKey}:`, error.message);
+        else console.log(`[WC] ${roundKey.toUpperCase()} predictions persisted to Supabase`);
+      });
+  }
+}
+
+// Attach the frozen round-start prediction to each knockout fixture.
+// - _prePrediction : always set (used by AccuracyView for completed games)
+// - _prediction    : set for NS fixtures so the UI shows the locked-in pick
+// Falls back to a live wcPoisson call if the round wasn't frozen yet.
+function attachKnockoutPrePreds(fixtures) {
+  const norm = s => (s ?? '').toLowerCase().replace(/[^a-z]/g, '');
+  return fixtures.map(f => {
+    const roundKey = _getRoundKey(f.round);
+    if (!roundKey) return f;
+
+    const cache = _wcKnockoutPredCache[roundKey];
+    if (!cache?.predictions) {
+      // No frozen data yet — fall back to live prediction for NS, pass-through for FT
+      return enrichWithPredictions([f])[0];
+    }
+
+    const home = f.teams?.home?.name ?? '';
+    const away = f.teams?.away?.name ?? '';
+    const hn   = norm(home);
+    const an   = norm(away);
+
+    let match = cache.predictions.find(p => norm(p.home) === hn && norm(p.away) === an);
+    let swapped = false;
+    if (!match) {
+      match   = cache.predictions.find(p => norm(p.away) === hn && norm(p.home) === an);
+      swapped = true;
+    }
+    if (!match) return enrichWithPredictions([f])[0]; // team name mismatch — fallback
+
+    const pred = swapped
+      ? { ...match, home: match.away, away: match.home,
+          homeWin: match.awayWin, awayWin: match.homeWin,
+          predictedScore: (match.predictedScore ?? '').split('-').reverse().join('-') }
+      : match;
+
+    const withPrePred = { ...f, _prePrediction: pred };
+    // For upcoming (NS) games show the locked prediction; completed games keep their result
+    return f._statusShort === 'NS'
+      ? { ...withPrePred, _prediction: pred }
+      : withPrePred;
+  });
 }
 
 // GET /api/wc/tournament
@@ -4034,6 +4165,23 @@ app.get('/api/wc/tournament', async (req, res) => {
 
     const allGroupFixtures = [...attachPrePreds(groupFixtures), ...scheduleOnlyFixtures];
 
+    // Freeze knockout round predictions the first time we enter each round.
+    // This locks in the pre-round ELO snapshot so predictions don't drift as
+    // results come in mid-round. Runs async but we await so the cache is warm
+    // before we call attachKnockoutPrePreds below.
+    const phaseToRoundKey = {
+      ROUND_OF_32:    'r32',
+      ROUND_OF_16:    'r16',
+      QUARTER_FINALS: 'qf',
+      SEMI_FINALS:    'sf',
+      FINAL:          'final',
+    };
+    const currentRoundKey = phaseToRoundKey[phase];
+    if (currentRoundKey && knockoutFixtures.length) {
+      await _freezeKnockoutRound(currentRoundKey, knockoutFixtures);
+    }
+    const allKnockoutFixtures = attachKnockoutPrePreds(knockoutFixtures);
+
     // Compute live tournament reach — completed groups use actual standings,
     // incomplete groups are simulated. This keeps Odds tab and Team Detail
     // Modal accurate throughout the tournament.
@@ -4043,7 +4191,7 @@ app.get('/api/wc/tournament', async (req, res) => {
       phase,
       groups,
       groupFixtures:          allGroupFixtures,
-      knockoutFixtures:       enrichWithPredictions(knockoutFixtures),
+      knockoutFixtures:       allKnockoutFixtures,
       hardcodedGroups:        WC_GROUPS,
       wcSchedule:             WC_SCHEDULE,
       groupMatchPredictions:  prePreds?.groupMatchPredictions ?? {},
@@ -5383,6 +5531,7 @@ app.listen(PORT, async () => {
   // Build dynamic ELO from international results before freezing WC predictions
   await initDynamicElo();
   await initWcPrePredictions();
+  await initWcKnockoutPreds();
 
   checkSeasonRollover();
   runHealthChecks();
