@@ -2973,25 +2973,22 @@ function wcPoisson(homeTeam, awayTeam) {
     draw = Math.max(0.05, 1 - hWin - aWin);
   }
 
-  // Hybrid predicted score:
-  // - If one team has ≥37% win probability → conditional argmax (most likely score
-  //   given that outcome), so moderate favourites (38-44%) show 1-0 / 2-1 rather
-  //   than defaulting to 1-1. Threshold was 0.45 — too high, caused Germany vs
-  //   Ecuador (44%) and Turkey vs USA (40%) to show 1-1 despite a clear favourite.
-  // - Otherwise (genuine toss-up, both ≤37%) → unconditional matrix argmax, which
-  //   naturally gives 1-1 for truly equal matchups. Preserves draw predictions.
+  // Always pick the most likely scoreline within the most likely outcome.
+  // If home win is most likely → pick the highest-probability scoreline where h > a.
+  // If draw is most likely → pick highest-probability h === a scoreline.
+  // If away win is most likely → pick highest-probability scoreline where a > h.
+  // This keeps the predicted score consistent with the win percentages.
   const sortedScores = Object.entries(scores).sort((a, b) => b[1] - a[1]);
-  let predictedScore;
-  if (hWin >= 0.37 || aWin >= 0.37) {
-    const outcome = hWin >= aWin ? 'home' : 'away';
-    const filtered = sortedScores.filter(([s]) => {
-      const [h, a] = s.split('-').map(Number);
-      return outcome === 'home' ? h > a : a > h;
-    });
-    predictedScore = filtered.length > 0 ? filtered[0][0] : sortedScores[0][0];
-  } else {
-    predictedScore = sortedScores[0][0];
-  }
+  const mostLikely = hWin >= draw && hWin >= aWin ? 'home'
+                   : aWin >= draw && aWin >= hWin ? 'away'
+                   : 'draw';
+  const filtered = sortedScores.filter(([s]) => {
+    const [h, a] = s.split('-').map(Number);
+    if (mostLikely === 'home') return h > a;
+    if (mostLikely === 'away') return a > h;
+    return h === a;
+  });
+  const predictedScore = filtered.length > 0 ? filtered[0][0] : sortedScores[0][0];
 
   return {
     homeWin:        +hWin.toFixed(4),
