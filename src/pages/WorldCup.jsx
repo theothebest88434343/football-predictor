@@ -1093,8 +1093,31 @@ function TeamDetailModal({ team, data, onClose }) {
   const groupLetter = Object.keys(hardcodedGroups).find(l => hardcodedGroups[l].includes(team)) ?? '';
   const color = GROUP_COLORS[groupLetter] ?? 'var(--gold)';
 
-  const allMatches = data?.groupMatchPredictions?.[groupLetter] ?? [];
-  const teamMatches = allMatches.filter(m => m.home === team || m.away === team);
+  // Use live groupFixtures so predicted scores match the Group card and Stats view.
+  // For completed games use _prePrediction (frozen); for upcoming use _prediction (live).
+  const normName = s => (s ?? '').toLowerCase().replace(/[^a-z]/g, '');
+  const teamFixtures = (data?.groupFixtures ?? []).filter(f => {
+    const h = f.teams?.home?.name ?? '';
+    const a = f.teams?.away?.name ?? '';
+    return normName(h) === normName(team) || normName(a) === normName(team);
+  });
+  const teamMatches = teamFixtures.map(f => {
+    const h      = f.teams?.home?.name ?? '';
+    const a      = f.teams?.away?.name ?? '';
+    const status = f._statusShort ?? 'NS';
+    const played = ['FT','AET','PEN'].includes(status);
+    const src    = played ? (f._prePrediction ?? f._prediction) : f._prediction;
+    return {
+      home:           h,
+      away:           a,
+      homeWin:        src?.homeWin  ?? 0,
+      awayWin:        src?.awayWin  ?? 0,
+      draw:           src?.draw     ?? 0,
+      predictedScore: src?.predictedScore ?? '?-?',
+      _statusShort:   status,
+      goals:          f.goals,
+    };
+  });
 
   const standings = data?.groupPredictedStandings?.[groupLetter] ?? [];
   const rankEntry = standings.find(r => r.team === team);
