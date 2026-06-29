@@ -1,5 +1,5 @@
 'use strict';
-// v2026.06.14
+
 require('dotenv').config();
 
 process.on('unhandledRejection', (reason, promise) => {
@@ -78,8 +78,9 @@ const {
 // prediction routes return empty data — there is no local file fallback.
 
 const { createClient } = require('@supabase/supabase-js');
+const ws = require('ws');
 const supabase = process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY
-  ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY)
+  ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY, { realtime: { transport: ws } })
   : null;
 
 const db = require('./core/db/predictions');
@@ -3911,8 +3912,6 @@ async function initWcKnockoutPreds() {
 // fixture in that round (even ones already FT — we capture the best-available ELO
 // snapshot at the moment the round is first observed) and persists to Supabase.
 async function _freezeKnockoutRound(roundKey, allKnockoutFixtures) {
-  if (_wcKnockoutPredCache[roundKey]) return; // already frozen this round
-
   const roundFixtures = allKnockoutFixtures.filter(f => {
     const key = _getRoundKey(f.round);
     return key === roundKey && f.teams?.home?.name && f.teams?.away?.name;
@@ -3920,6 +3919,31 @@ async function _freezeKnockoutRound(roundKey, allKnockoutFixtures) {
   if (!roundFixtures.length) return;
 
   const norm = s => (s ?? '').toLowerCase().replace(/[^a-z]/g, '');
+
+  // If already frozen, only add fixtures not yet in the cache (ESPN trickles games in)
+  const existing = _wcKnockoutPredCache[roundKey];
+  if (existing?.predictions) {
+    const frozenKeys = new Set(existing.predictions.map(p => `${norm(p.home)}|${norm(p.away)}`));
+    const newFixtures = roundFixtures.filter(f => !frozenKeys.has(`${norm(f.teams.home.name)}|${norm(f.teams.away.name)}`));
+    if (!newFixtures.length) return; // nothing new to add
+    const newPreds = newFixtures.map(f => ({
+      home: f.teams.home.name, away: f.teams.away.name,
+      ...wcPoisson(f.teams.home.name, f.teams.away.name),
+    }));
+    const merged = [...existing.predictions, ...newPreds];
+    const savedAt = new Date().toISOString();
+    const dataToStore = { predictions: merged, modelVersion: WC_MODEL_VERSION };
+    _wcKnockoutPredCache[roundKey] = { savedAt, ...dataToStore };
+    console.log(`[WC] Added ${newPreds.length} new ${roundKey.toUpperCase()} prediction(s) (total: ${merged.length})`);
+    if (supabase) {
+      const id = KNOCKOUT_ROUND_IDS[roundKey];
+      supabase.from('wc_predictions')
+        .upsert({ id, saved_at: savedAt, data: dataToStore }, { onConflict: 'id' })
+        .then(({ error }) => { if (error) console.warn(`[WC] Supabase save ${roundKey}:`, error.message); });
+    }
+    return;
+  }
+
   const predictions = roundFixtures.map(f => ({
     home: f.teams.home.name,
     away: f.teams.away.name,
