@@ -598,16 +598,10 @@ export default function Fixtures() {
 
   if (loading) return <div className="loading-card"><div className="spinner" /><div>Loading fixtures…</div></div>;
   if (error)   return <ErrorCard message={error} onRetry={refresh} />;
-  if (!allFixtures?.length) {
-    return (
-      <div className="loading-card">
-        No upcoming fixtures found.
-        <div style={{ fontSize: 12, marginTop: 6, color: 'var(--text-muted)' }}>
-          The FPL API may be updating after the season ends.
-        </div>
-      </div>
-    );
-  }
+  // FPL publishes the new season's fixtures later than football-data.org does
+  // (usually mid-July). Until then, fall back to the football-data pipeline that
+  // every other league already uses.
+  if (!allFixtures?.length) return <FdFixtures />;
 
   const displayed = selectedTeam
     ? allFixtures.filter(f =>
