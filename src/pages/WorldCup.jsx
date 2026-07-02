@@ -2864,6 +2864,74 @@ function DisclaimerModal({ onDismiss }) {
   );
 }
 
+// ─── Sub-switcher (used inside the merged hub tabs) ─────────────────────────────
+function SubSwitch({ options, value, onChange }) {
+  return (
+    <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
+      {options.map(o => (
+        <button
+          key={o.id}
+          onClick={() => onChange(o.id)}
+          style={{
+            flex: '0 0 auto', padding: '6px 14px', borderRadius: 999,
+            border: value === o.id ? '1px solid var(--gold)' : '1px solid var(--border)',
+            background: value === o.id ? 'rgba(255,215,0,0.1)' : 'var(--surface2)',
+            color: value === o.id ? 'var(--gold)' : 'var(--text-muted)',
+            fontWeight: 700, fontSize: 11, whiteSpace: 'nowrap', cursor: 'pointer',
+          }}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// Merged "Insights" tab — Analysis / Winner odds / ELO rankings in one place.
+function InsightsHub({ dataFallback, dataCalibrated, hasApiData, boostedReach, boosts, toggleBoost, onTeamClick }) {
+  const [sub, setSub] = useState('analysis');
+  return (
+    <div>
+      <SubSwitch
+        value={sub}
+        onChange={setSub}
+        options={[
+          { id: 'analysis', label: 'Analysis' },
+          { id: 'odds',     label: '🏆 Winner odds' },
+          { id: 'rankings', label: '📈 Rankings' },
+        ]}
+      />
+      {sub === 'odds' ? (
+        <WinnerOddsView data={hasApiData ? dataCalibrated : dataFallback} boostedReach={boostedReach} boosts={boosts} toggleBoost={toggleBoost} onTeamClick={onTeamClick} />
+      ) : sub === 'rankings' ? (
+        <EloRankingsView onTeamClick={onTeamClick} />
+      ) : (
+        <InsightsView data={dataFallback} onTeamClick={onTeamClick} />
+      )}
+    </div>
+  );
+}
+
+// Merged "Bracket" tab — predicted bracket + live knockout results.
+function BracketHub({ data, dataFallback }) {
+  const hasKnockout = !!data?.knockoutFixtures?.length;
+  const [sub, setSub] = useState(hasKnockout ? 'live' : 'predicted');
+  if (!hasKnockout) return <BracketView data={dataFallback} />;
+  return (
+    <div>
+      <SubSwitch
+        value={sub}
+        onChange={setSub}
+        options={[
+          { id: 'live',      label: 'Live results' },
+          { id: 'predicted', label: 'Predicted bracket' },
+        ]}
+      />
+      {sub === 'predicted' ? <BracketView data={dataFallback} /> : <KnockoutView data={data} />}
+    </div>
+  );
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function WorldCup() {
@@ -2983,10 +3051,7 @@ export default function WorldCup() {
           { id: 'table',    label: 'Table' },
           { id: 'bracket',  label: 'Bracket' },
           { id: 'insights', label: 'Insights' },
-          { id: 'odds',     label: '🏆 Odds' },
-          { id: 'rankings', label: '📈 Rankings' },
           { id: 'accuracy', label: '📊 Stats' },
-          ...(hasApiData && (isKnockout || data?.knockoutFixtures?.length) ? [{ id: 'knockout', label: 'Knockout' }] : []),
         ]).map(({ id, label, disabled }) => (
           <button
             key={id}
@@ -3013,20 +3078,22 @@ export default function WorldCup() {
       </div>
 
       {/* Content */}
-      {view === 'rankings' ? (
-        <EloRankingsView onTeamClick={setSelectedTeam} />
-      ) : view === 'bracket' ? (
-        <BracketView data={dataFallback} />
+      {view === 'bracket' ? (
+        <BracketHub data={data} dataFallback={dataFallback} />
       ) : view === 'table' ? (
         <PredictedTableView data={dataCalibrated} onTeamClick={setSelectedTeam} />
       ) : view === 'insights' ? (
-        <InsightsView data={hasApiData ? dataFallback : dataFallback} onTeamClick={setSelectedTeam} />
-      ) : view === 'odds' ? (
-        <WinnerOddsView data={hasApiData ? dataCalibrated : dataFallback} boostedReach={boostedReach} boosts={boosts} toggleBoost={toggleBoost} onTeamClick={setSelectedTeam} />
+        <InsightsHub
+          dataFallback={dataFallback}
+          dataCalibrated={dataCalibrated}
+          hasApiData={hasApiData}
+          boostedReach={boostedReach}
+          boosts={boosts}
+          toggleBoost={toggleBoost}
+          onTeamClick={setSelectedTeam}
+        />
       ) : view === 'accuracy' ? (
         <WCStatsView data={hasApiData ? data : dataFallback} />
-      ) : view === 'knockout' ? (
-        <KnockoutView data={data} />
       ) : hasApiData ? (
         <GroupStageView data={data} />
       ) : (
