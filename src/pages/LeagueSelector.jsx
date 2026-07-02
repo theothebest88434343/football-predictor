@@ -200,15 +200,9 @@ export default function LeagueSelector() {
     <div>
       {!isSwitch && <MatchIQHero />}
 
-      <div style={{ textAlign: 'center', padding: isSwitch ? '28px 0 24px' : '4px 0 18px' }}>
-        <div style={{ fontSize: 13, color: 'var(--text-muted)', letterSpacing: 1, fontWeight: 600, marginBottom: 4 }}>
-          {isSwitch ? 'FOOTBALL PREDICTIONS' : 'EXPLORE PREDICTIONS'}
-        </div>
-        <div style={{
-          fontSize: 28, fontWeight: 700, fontFamily: 'Bebas Neue, sans-serif',
-          letterSpacing: 2, color: 'var(--text)',
-        }}>
-          Choose your league
+      <div style={{ textAlign: 'center', padding: isSwitch ? '28px 0 24px' : '4px 0 16px' }}>
+        <div style={{ fontSize: 12, color: 'var(--text-muted)', letterSpacing: 1.5, fontWeight: 600 }}>
+          {isSwitch ? 'FOOTBALL PREDICTIONS' : 'CHOOSE A COMPETITION'}
         </div>
       </div>
 
