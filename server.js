@@ -18,6 +18,7 @@ const express   = require('express');
 const cors      = require('cors');
 const axios     = require('axios');
 const cron      = require('node-cron');
+const crypto    = require('crypto');
 const webPush   = require('web-push');
 const fs        = require('fs');
 const path      = require('path');
@@ -96,6 +97,28 @@ const PORT = process.env.PORT || 3001;
 
 app.use(cors());
 app.use(express.json());
+
+// ─── Admin auth ─────────────────────────────────────────────────────────────
+// Shared-secret guard for state-mutating operator endpoints. Set ADMIN_TOKEN in
+// the environment; requests must send it as `Authorization: Bearer <token>` (or
+// an `x-admin-token` header). If ADMIN_TOKEN is unset the guarded routes are
+// disabled entirely (fail closed) rather than left open to the public.
+function requireAdmin(req, res, next) {
+  const expected = process.env.ADMIN_TOKEN;
+  if (!expected) {
+    return res.status(503).json({ error: 'Admin endpoint disabled (ADMIN_TOKEN not configured)' });
+  }
+  const header = req.get('authorization') ?? '';
+  const bearer = header.startsWith('Bearer ') ? header.slice(7) : null;
+  const provided = bearer ?? req.get('x-admin-token') ?? '';
+  // Constant-time-ish comparison to avoid trivial timing leaks
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+}
 
 // ─── Health check ─────────────────────────────────────────────────────────────
 
@@ -2094,10 +2117,16 @@ app.get('/api/betting-sim', async (req, res) => {
 
 // ─── Route: POST /api/tracker/result ─────────────────────────────────────────
 
-app.post('/api/tracker/result', async (req, res) => {
+app.post('/api/tracker/result', requireAdmin, async (req, res) => {
   try {
     const { fixtureId, homeGoals, awayGoals } = req.body;
     if (!supabase || !currentSeason?.id) return res.status(503).json({ error: 'DB unavailable' });
+
+    // Validate scores: small non-negative integers only
+    const validScore = v => Number.isInteger(v) && v >= 0 && v <= 99;
+    if (!validScore(homeGoals) || !validScore(awayGoals)) {
+      return res.status(400).json({ error: 'homeGoals/awayGoals must be integers between 0 and 99' });
+    }
 
     // Find the prediction row — search all leagues for this fixture_id in current season
     const { data: rows } = await supabase.from('predictions')
@@ -2493,8 +2522,34 @@ app.get('/api/referee-stats/:fixtureId', async (req, res) => {
 
 // ─── Route: POST /api/push/subscribe ─────────────────────────────────────────
 
+// Allowed push-service hosts. Real subscription endpoints come from the browser's
+// push service; reject anything else so the server can't be tricked into signing
+// requests toward arbitrary URLs.
+const ALLOWED_PUSH_HOSTS = [
+  /\.push\.services\.mozilla\.com$/,
+  /(^|\.)fcm\.googleapis\.com$/,
+  /(^|\.)android\.googleapis\.com$/,
+  /(^|\.)notify\.windows\.com$/,
+  /(^|\.)push\.apple\.com$/,
+];
+
+function isValidPushSubscription(sub) {
+  if (!sub || typeof sub.endpoint !== 'string') return false;
+  let url;
+  try { url = new URL(sub.endpoint); } catch { return false; }
+  if (url.protocol !== 'https:') return false;
+  if (!ALLOWED_PUSH_HOSTS.some(re => re.test(url.hostname))) return false;
+  // Must carry the standard p256dh + auth keys
+  const keys = sub.keys;
+  if (!keys || typeof keys.p256dh !== 'string' || typeof keys.auth !== 'string') return false;
+  return true;
+}
+
 app.post('/api/push/subscribe', (req, res) => {
   const sub = req.body;
+  if (!isValidPushSubscription(sub)) {
+    return res.status(400).json({ error: 'Invalid push subscription' });
+  }
   if (!subscriptions.find(s => s.endpoint === sub.endpoint)) {
     subscriptions.push(sub);
   }
@@ -4345,7 +4400,7 @@ function invalidateMonitorCache() {
  *
  * Returns: { ok: true, n: <total settled count> }
  */
-app.post('/api/monitor/record-outcome', (req, res) => {
+app.post('/api/monitor/record-outcome', requireAdmin, (req, res) => {
   const { entry, error } = modelMonitor.recordPredictionOutcome(req.body ?? {});
   if (error) return res.status(400).json({ error });
 
@@ -4370,7 +4425,7 @@ app.post('/api/monitor/record-outcome', (req, res) => {
  * Body: { outcomes: Array<outcome> }
  * Returns: { ok: true, accepted: N, rejected: [{index, error}] }
  */
-app.post('/api/monitor/record-outcomes', (req, res) => {
+app.post('/api/monitor/record-outcomes', requireAdmin, (req, res) => {
   const { outcomes } = req.body ?? {};
   if (!Array.isArray(outcomes)) return res.status(400).json({ error: 'outcomes[] required' });
 

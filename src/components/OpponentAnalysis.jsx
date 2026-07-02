@@ -1,17 +1,7 @@
 import { useState } from 'react';
 import { useFetch } from '../hooks/useFetch';
 import { ChevronDown, ChevronUp } from 'lucide-react';
-
-function renderMarkdown(text) {
-  // Minimal markdown: **bold**, newlines
-  return text
-    .split('\n')
-    .map((line, i) => {
-      const withBold = line.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-      return `<p key="${i}" style="margin-bottom:6px">${withBold}</p>`;
-    })
-    .join('');
-}
+import { renderAnalysisHtml } from '../utils/renderAnalysis';
 
 export default function OpponentAnalysis({ teamId, myTeamCode }) {
   const [open, setOpen] = useState(false);
@@ -54,7 +44,7 @@ export default function OpponentAnalysis({ teamId, myTeamCode }) {
               )}
               <div
                 style={{ fontSize: 13, lineHeight: 1.6, color: 'var(--text)' }}
-                dangerouslySetInnerHTML={{ __html: data.analysis.replace(/\n/g, '<br/>').replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>') }}
+                dangerouslySetInnerHTML={{ __html: renderAnalysisHtml(data.analysis) }}
               />
             </>
           )}

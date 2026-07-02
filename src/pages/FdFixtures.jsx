@@ -5,6 +5,7 @@ import { ChevronDown, ChevronUp } from 'lucide-react';
 import { useFetch } from '../hooks/useFetch';
 import { useFavouriteTeam } from '../hooks/useFavouriteTeam';
 import { getLeague } from '../utils/leagues.jsx';
+import { renderAnalysisHtml } from '../utils/renderAnalysis';
 import ScoreMatrix from '../components/ScoreMatrix';
 import XGPanel from '../components/XGPanel';
 import FormChart from '../components/FormChart';
@@ -172,11 +173,7 @@ function FdOpponentAnalysis({ leagueId, opponentId, opponentName, myTeamName }) 
               )}
               <div
                 style={{ fontSize: 13, lineHeight: 1.6, color: 'var(--text)' }}
-                dangerouslySetInnerHTML={{
-                  __html: data.analysis
-                    .replace(/\n/g, '<br/>')
-                    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>'),
-                }}
+                dangerouslySetInnerHTML={{ __html: renderAnalysisHtml(data.analysis) }}
               />
             </>
           )}
