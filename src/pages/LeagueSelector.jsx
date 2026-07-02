@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useFetch } from '../hooks/useFetch';
 import ClubBadge from '../components/ClubBadge';
+import MatchIQHero from '../components/MatchIQHero';
 import { LEAGUES, getLeague, LeagueIcon } from '../utils/leagues.jsx';
 
 // ─── Team picker ─────────────────────────────────────────────────────────────
@@ -197,9 +198,11 @@ export default function LeagueSelector() {
 
   return (
     <div>
-      <div style={{ textAlign: 'center', padding: '28px 0 24px' }}>
+      {!isSwitch && <MatchIQHero />}
+
+      <div style={{ textAlign: 'center', padding: isSwitch ? '28px 0 24px' : '4px 0 18px' }}>
         <div style={{ fontSize: 13, color: 'var(--text-muted)', letterSpacing: 1, fontWeight: 600, marginBottom: 4 }}>
-          FOOTBALL PREDICTIONS
+          {isSwitch ? 'FOOTBALL PREDICTIONS' : 'EXPLORE PREDICTIONS'}
         </div>
         <div style={{
           fontSize: 28, fontWeight: 700, fontFamily: 'Bebas Neue, sans-serif',

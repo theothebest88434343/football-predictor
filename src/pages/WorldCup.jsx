@@ -3,6 +3,7 @@ import PathToFinal, { PathToFinalCompact, PathToFinalCompactHeader, PathToFinalS
 import { MatchCardSkeleton }    from '../components/MatchCard';
 import { format, parseISO } from 'date-fns';
 import squadsData from '../data/wc2026-squads.json';
+import { computeWcAccuracy } from '../utils/wcAccuracy';
 
 // ─── Flag map ─────────────────────────────────────────────────────────────────
 
@@ -1912,38 +1913,10 @@ function WCStatsView({ data }) {
 // Compares every pre-tournament prediction against the actual result once played.
 // Shows aggregate stats + per-group advancement accuracy.
 function AccuracyView({ data }) {
-  const { groupFixtures = [], knockoutFixtures = [], groupPredictedStandings = {}, hardcodedGroups = {}, groups = {} } = data;
+  const { groupPredictedStandings = {}, hardcodedGroups = {}, groups = {} } = data;
 
-  // ── Collect all played fixtures that had a pre-tournament prediction ──────
-  const allFixtures = [...groupFixtures, ...knockoutFixtures];
-  const evaluated   = [];
-
-  for (const f of allFixtures) {
-    const status = f._statusShort ?? f.fixture?.status?.short ?? 'NS';
-    if (!['FT','AET','PEN'].includes(status)) continue;
-    const prePred = f._prePrediction;
-    if (!prePred) continue;
-    const hGoals = f.goals?.home;
-    const aGoals = f.goals?.away;
-    if (hGoals == null || aGoals == null) continue;
-
-    const [ph, pa] = (prePred.predictedScore ?? '').split('-').map(Number);
-    let outcome;
-    if (ph === hGoals && pa === aGoals) {
-      outcome = 'score';
-    } else {
-      const predWinner = ph > pa ? 'H' : ph < pa ? 'A' : 'D';
-      const realWinner = hGoals > aGoals ? 'H' : hGoals < aGoals ? 'A' : 'D';
-      outcome = predWinner === realWinner ? 'result' : 'wrong';
-    }
-    evaluated.push({ fixture: f, outcome, prePred, hGoals, aGoals });
-  }
-
-  const exact   = evaluated.filter(e => e.outcome === 'score').length;
-  const correct = evaluated.filter(e => e.outcome === 'result').length;
-  const wrong   = evaluated.filter(e => e.outcome === 'wrong').length;
-  const total   = evaluated.length;
-  const pctRight = total > 0 ? Math.round(((exact + correct) / total) * 100) : null;
+  // ── Aggregate accuracy (shared helper — same numbers as the landing hero) ──
+  const { evaluated, exact, correct, wrong, total, pctRight } = computeWcAccuracy(data);
 
   // ── Group advancement accuracy ────────────────────────────────────────────
   const apiGroupsByLetter = {};
