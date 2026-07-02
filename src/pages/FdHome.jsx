@@ -384,13 +384,43 @@ export default function FdHome() {
 
   const loading = mLoading || sLoading;
 
+  // Resolve the favourite team's football-data teamId. Teams saved from the
+  // FPL picker carry FPL ids, which don't match football-data ids — so if the
+  // saved id isn't in this league's data, fall back to matching by name.
+  const favId = useMemo(() => {
+    if (!favTeam?.id) return null;
+    const norm = s => (s ?? '').toLowerCase().replace(/[^a-z]/g, '');
+    const fn = norm(favTeam.name);
+    const fs = norm(favTeam.short);
+    const nameMatch = t =>
+      norm(t.name) === fn || norm(t.shortName) === fn ||
+      norm(t.name) === fs || norm(t.shortName) === fs ||
+      (fn && norm(t.name).includes(fn)) || (fs && norm(t.shortName).includes(fs));
+
+    if (standings?.some(r => r.teamId === favTeam.id)) return favTeam.id;
+    const row = standings?.find(r => nameMatch({ name: r.name, shortName: r.shortName }));
+    if (row) return row.teamId;
+    // Standings can lag a season rollover — try the match feed too
+    for (const m of allMatches ?? []) {
+      if (nameMatch(m.homeTeam)) return m.homeTeam.id;
+      if (nameMatch(m.awayTeam)) return m.awayTeam.id;
+    }
+    return favTeam.id;
+  }, [standings, allMatches, favTeam?.id, favTeam?.name, favTeam?.short]);
+
+  // favTeam with the resolved football-data id, for child components
+  const fdFavTeam = useMemo(
+    () => (favTeam ? { ...favTeam, id: favId } : favTeam),
+    [favTeam, favId]
+  );
+
   // Filter matches for the favourite team
   const teamMatches = useMemo(() => {
-    if (!allMatches || !favTeam?.id) return [];
+    if (!allMatches || !favId) return [];
     return allMatches.filter(
-      m => m.homeTeam.id === favTeam.id || m.awayTeam.id === favTeam.id
+      m => m.homeTeam.id === favId || m.awayTeam.id === favId
     );
-  }, [allMatches, favTeam?.id]);
+  }, [allMatches, favId]);
 
   // Next upcoming fixture
   const nextFixture = useMemo(
@@ -406,9 +436,9 @@ export default function FdHome() {
 
   // Find this team's standings row
   const standingsRow = useMemo(() => {
-    if (!standings || !favTeam?.id) return null;
-    return standings.find(r => r.teamId === favTeam.id) ?? null;
-  }, [standings, favTeam?.id]);
+    if (!standings || !favId) return null;
+    return standings.find(r => r.teamId === favId) ?? null;
+  }, [standings, favId]);
 
   // Off-season: all team matches loaded and finished, none upcoming
   const isOffSeason = !loading && teamMatches.length > 0 && !nextFixture;
@@ -458,7 +488,7 @@ export default function FdHome() {
         standings={standings}
         standingsRow={standingsRow}
         recentResults={recentResults}
-        favTeam={favTeam}
+        favTeam={fdFavTeam}
         league={league}
         scorers={scorers}
       />
@@ -467,9 +497,9 @@ export default function FdHome() {
 
   return (
     <div>
-      <HeroCard match={nextFixture} favTeam={favTeam} prediction={heroPred} />
+      <HeroCard match={nextFixture} favTeam={fdFavTeam} prediction={heroPred} />
       <StatsBar row={standingsRow} />
-      <RecentResults results={recentResults} favTeam={favTeam} />
+      <RecentResults results={recentResults} favTeam={fdFavTeam} />
     </div>
   );
 }

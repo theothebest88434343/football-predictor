@@ -138,6 +138,10 @@ export default function Home() {
     return <div className="loading-card"><div className="spinner" /><div>Loading {favTeam.name} data…</div></div>;
   }
 
+  // FPL publishes the new season later than football-data.org — until it rolls
+  // over, use the football-data home view like every other league.
+  if (!fixtures?.length) return <FdHome />;
+
   return (
     <div>
       {nextFixture ? (
