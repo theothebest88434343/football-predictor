@@ -773,11 +773,81 @@ function calcLeagueAverages(fixtures) {
 
 // ─── Rolling ratings (cached 5 min) ──────────────────────────────────────────
 
+// FPL display names → football-data full names, for teams where normalised
+// containment matching fails. Used to seed FPL ratings from last season's
+// football-data results at the start of a season.
+const FPL_TO_FD_NAME = {
+  'Man City':      'Manchester City FC',
+  'Man Utd':       'Manchester United FC',
+  'Spurs':         'Tottenham Hotspur FC',
+  "Nott'm Forest": 'Nottingham Forest FC',
+  'Wolves':        'Wolverhampton Wanderers FC',
+  'Bournemouth':   'AFC Bournemouth',
+  'Sheffield Utd': 'Sheffield United FC',
+};
+
+// Last season's PL results converted to FPL fixture shape (team ids remapped
+// by name). Empty array when mapping/fetching fails — callers degrade to
+// unseeded ratings.
+async function getFplSeedFixtures() {
+  const cached = getCache('fpl_seed_fixtures');
+  if (cached) return cached;
+  try {
+    const [teams, seed] = await Promise.all([getBootstrapTeams(), getFdSeedMatches('PL')]);
+    const norm = s => (s ?? '').toLowerCase().replace(/[^a-z]/g, '');
+
+    const fdIdByName = new Map();
+    for (const m of seed) {
+      fdIdByName.set(norm(m.homeTeam.name), m.homeTeam.id);
+      fdIdByName.set(norm(m.awayTeam.name), m.awayTeam.id);
+    }
+
+    const fplIdByFdId = {};
+    for (const t of teams) {
+      const mapped = FPL_TO_FD_NAME[t.name];
+      let fdId = mapped ? fdIdByName.get(norm(mapped)) : undefined;
+      if (fdId === undefined) {
+        const nt = norm(t.name);
+        for (const [fdName, id] of fdIdByName) {
+          if (fdName.includes(nt)) { fdId = id; break; }
+        }
+      }
+      if (fdId !== undefined) fplIdByFdId[fdId] = t.id;
+    }
+
+    const fixtures = seed
+      .filter(m => fplIdByFdId[m.homeTeam.id] != null && fplIdByFdId[m.awayTeam.id] != null)
+      .map(m => ({
+        team_h:       fplIdByFdId[m.homeTeam.id],
+        team_a:       fplIdByFdId[m.awayTeam.id],
+        team_h_score: m.homeGoals,
+        team_a_score: m.awayGoals,
+        kickoff_time: m.kickoffTime,
+        finished:     true,
+      }));
+    setCache('fpl_seed_fixtures', fixtures, 24 * 60 * 60 * 1000);
+    return fixtures;
+  } catch (err) {
+    console.warn('[FPL seed]', err.message);
+    return [];
+  }
+}
+
+// FPL fixtures, prepended with last season's results while the current season
+// is too young to rate teams on its own.
+async function getSeededPlFixtures() {
+  const allFixtures = await fetchFixtures();
+  const finished = allFixtures.filter(f => f.finished).length;
+  if (finished >= RATING_SEED_THRESHOLD) return allFixtures;
+  const seed = await getFplSeedFixtures();
+  return seed.length ? [...seed, ...allFixtures] : allFixtures;
+}
+
 async function getRollingRatings() {
   const cached = getCache('rolling_ratings');
   if (cached) return cached;
 
-  const allFixtures = await fetchFixtures();
+  const allFixtures = await getSeededPlFixtures();
   const leagueAvg   = calcLeagueAverages(allFixtures);
   const result      = buildRollingRatings(allFixtures, leagueAvg.home, leagueAvg.away);
 
@@ -789,7 +859,7 @@ async function getEloRatings() {
   const cached = getCache('elo_ratings');
   if (cached) return cached;
 
-  const allFixtures = await fetchFixtures();
+  const allFixtures = await getSeededPlFixtures();
   const result      = buildEloRatings(allFixtures);
   setCache('elo_ratings', result, TTL.FPL);
   return result;
@@ -2248,7 +2318,7 @@ app.get('/api/tracker/history', async (req, res) => {
 // ─── Route: POST /api/refresh-cache ──────────────────────────────────────────
 
 app.post('/api/refresh-cache', (req, res) => {
-  cache.clear();
+  cache.clearAll();
   res.json({ ok: true, message: 'All caches cleared' });
 });
 
@@ -2754,7 +2824,7 @@ async function checkSeasonRollover() {
   try {
     // getOrCreateSeason handles the is_current flag transition atomically
     currentSeason = await db.getOrCreateSeason(supabase);
-    ['rolling_ratings', 'elo_ratings', 'fixtures_all', 'bootstrap'].forEach(k => cache.delete(k));
+    ['rolling_ratings', 'elo_ratings', 'fixtures_all', 'bootstrap'].forEach(k => cache.del(k));
     console.log(`[Season rollover] ✅ ${oldCode} → ${currentSeason.code}. Ratings cache cleared.`);
   } catch (err) {
     console.warn('[Season rollover] Failed:', err.message);
@@ -4653,6 +4723,83 @@ async function getFdMatches(code) {
   return promise;
 }
 
+// ─── Season-start rating seed ────────────────────────────────────────────────
+// At the start of a season the rolling/ELO ratings have no matches to work
+// with, so every prediction degenerates to a near-uniform coin flip. Seed the
+// ratings with the PREVIOUS season's results — the per-match decay inside
+// buildRollingRatings naturally phases them out as real games accumulate.
+
+const RATING_SEED_THRESHOLD = 60; // seed until this many current-season games
+
+// A finished season is immutable, so seeds are persisted to disk — a restart
+// (or Render cold start) doesn't cost another rate-limited fd request.
+const FD_SEED_FILE = path.join(__dirname, 'fd-season-seeds.json');
+
+function _readSeedFile() {
+  try { return JSON.parse(fs.readFileSync(FD_SEED_FILE, 'utf8')); }
+  catch { return {}; }
+}
+
+async function getFdSeedMatches(code) {
+  const now = new Date();
+  const y   = now.getFullYear();
+  // football-data identifies seasons by start year. Brasileirão runs on the
+  // calendar year; European leagues start in July/August.
+  const currentStart = code === 'BSA' ? y : (now.getMonth() >= 6 ? y : y - 1);
+  const seedSeason   = currentStart - 1;
+  const seedKey      = `${code}_${seedSeason}`;
+
+  const cacheKey = `fd_seed_${code}`;
+  const cached = getCache(cacheKey);
+  if (cached) return cached;
+
+  const onDisk = _readSeedFile()[seedKey];
+  if (onDisk?.length) {
+    setCache(cacheKey, onDisk, 24 * 60 * 60 * 1000);
+    return onDisk;
+  }
+
+  try {
+    const data = await fdFetch(`/competitions/${code}/matches?season=${seedSeason}`);
+    const matches = (data.matches ?? [])
+      .filter(m => m.status === 'FINISHED')
+      .sort((a, b) => new Date(a.utcDate) - new Date(b.utcDate))
+      .map(m => normaliseFdMatch(m, code));
+    setCache(cacheKey, matches, 24 * 60 * 60 * 1000);
+    if (matches.length) {
+      try {
+        const all = _readSeedFile();
+        all[seedKey] = matches;
+        fs.writeFileSync(FD_SEED_FILE, JSON.stringify(all));
+      } catch {}
+    }
+    return matches;
+  } catch (err) {
+    console.warn(`[FD seed ${code}]`, err.message);
+    setCache(cacheKey, [], 10 * 60 * 1000); // back off retries on failure
+    return [];
+  }
+}
+
+// Shared ratings inputs for the fd prediction paths, seeded when the current
+// season is young. Returns the same shapes the call sites built individually.
+async function getFdRatingInputs(code, allMatches) {
+  const finishedCount = allMatches.filter(m => m.finished).length;
+  let base = allMatches;
+  if (finishedCount < RATING_SEED_THRESHOLD) {
+    const seed = await getFdSeedMatches(code);
+    if (seed.length) base = [...seed, ...allMatches];
+  }
+  const leagueAvg = calcFdLeagueAverages(base);
+  const fplShape  = fdMatchesToFplShape(base);
+  return {
+    leagueAvg,
+    fplShape,
+    rollingRatings: buildRollingRatings(fplShape, leagueAvg.home, leagueAvg.away),
+    eloRatings:     buildEloRatings(fplShape),
+  };
+}
+
 // GET /api/fd/standings?league=la-liga
 app.get('/api/fd/standings', async (req, res) => {
   const leagueId = req.query.league;
@@ -4734,11 +4881,8 @@ app.get('/api/fd/predicted-table', async (req, res) => {
     }
 
     // Build prediction engine inputs (same as /api/fd/predictions)
-    const leagueAvg      = calcFdLeagueAverages(allMatches);
-    const fplShape       = fdMatchesToFplShape(allMatches);
+    const { leagueAvg, rollingRatings, eloRatings } = await getFdRatingInputs(code, allMatches);
     const formData       = buildFdFormData(allMatches);
-    const rollingRatings = buildRollingRatings(fplShape, leagueAvg.home, leagueAvg.away);
-    const eloRatings     = buildEloRatings(fplShape);
 
     const nameMap = FD_TO_UNDERSTAT_NAME[leagueId] ?? {};
     const xGData  = {};
@@ -4925,11 +5069,8 @@ app.get('/api/fd/predictions', async (req, res) => {
       }
     }
 
-    const leagueAvg      = calcFdLeagueAverages(allMatches);
-    const fplShape       = fdMatchesToFplShape(allMatches);
+    const { leagueAvg, fplShape, rollingRatings, eloRatings } = await getFdRatingInputs(code, allMatches);
     const formData       = buildFdFormData(allMatches);
-    const rollingRatings = buildRollingRatings(fplShape, leagueAvg.home, leagueAvg.away);
-    const eloRatings     = buildEloRatings(fplShape);
 
     const fdHomeRestDays = getFdRestDays(match.homeTeam.id, match.kickoffTime, allMatches);
     const fdAwayRestDays = getFdRestDays(match.awayTeam.id, match.kickoffTime, allMatches);
@@ -5310,11 +5451,8 @@ async function preFillPredictions() {
         }
       }
 
-      const leagueAvg      = calcFdLeagueAverages(allMatches);
-      const fplShape       = fdMatchesToFplShape(allMatches);
+      const { leagueAvg, fplShape, rollingRatings, eloRatings } = await getFdRatingInputs(code, allMatches);
       const formData       = buildFdFormData(allMatches);
-      const rollingRatings = buildRollingRatings(fplShape, leagueAvg.home, leagueAvg.away);
-      const eloRatings     = buildEloRatings(fplShape);
       const fdBulkAdvFactors = buildTeamHomeAdvantage(fplShape);
 
       const upcoming = allMatches.filter(m => !m.finished && m.kickoffTime);
