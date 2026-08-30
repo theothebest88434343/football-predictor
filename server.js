@@ -4723,11 +4723,22 @@ const FD_CODE = {
   'primeira-liga':  'PPL',
 };
 
-async function fdFetch(path) {
+// football-data.org's free tier allows ~10 req/min. When multiple leagues'
+// background jobs (PreFill, auto-settle, backfill) fire around server startup
+// they can burst past that limit — a bare 429 used to make PreFill give up on
+// a league entirely, which silently meant that league's opening matchdays
+// never got a pre-match prediction recorded (nothing left to grade later).
+// Retry with backoff so a transient rate limit doesn't become a permanent gap.
+async function fdFetch(path, attempt = 1) {
   if (!FD_KEY) throw new Error('FOOTBALL_DATA_API_KEY not set');
   const res = await fetch(`${FD_BASE}${path}`, {
     headers: { 'X-Auth-Token': FD_KEY },
   });
+  if (res.status === 429 && attempt < 4) {
+    const waitMs = attempt * 8000; // 8s, 16s, 24s
+    await new Promise(r => setTimeout(r, waitMs));
+    return fdFetch(path, attempt + 1);
+  }
   if (!res.ok) throw new Error(`football-data.org ${res.status}: ${path}`);
   return res.json();
 }
