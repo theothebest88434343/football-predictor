@@ -322,23 +322,29 @@ async function fetchUnderstatXG() {
 
   try {
     const year = new Date().getMonth() >= 6 ? new Date().getFullYear() : new Date().getFullYear() - 1;
-    const res  = await withRetry(
-      () => axios.get(`https://understat.com/getLeagueData/EPL/${year}`, {
-        timeout: 15000,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-          'Accept': 'application/json, text/javascript, */*; q=0.01',
-          'Referer': `https://understat.com/league/EPL/${year}`,
-          'X-Requested-With': 'XMLHttpRequest',
-        },
-      }),
-      { maxAttempts: 2, label: 'Understat xG' }
+    // Understat has no official API — it occasionally answers with HTTP 200 and
+    // an empty/malformed body (soft anti-scraping block) rather than a hard
+    // error. That's not an axios-level failure, so the "empty teams" check must
+    // live *inside* the retried function or a transient soft-fail never retries.
+    const raw = await withRetry(
+      async () => {
+        const res = await axios.get(`https://understat.com/getLeagueData/EPL/${year}`, {
+          timeout: 15000,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept': 'application/json, text/javascript, */*; q=0.01',
+            'Referer': `https://understat.com/league/EPL/${year}`,
+            'X-Requested-With': 'XMLHttpRequest',
+          },
+        });
+        const teams = res.data?.teams;
+        if (!teams || typeof teams !== 'object' || Object.keys(teams).length === 0) {
+          throw new Error(`Understat API returned no teams data (keys: ${Object.keys(res.data ?? {}).join(', ')})`);
+        }
+        return teams;
+      },
+      { maxAttempts: 3, baseDelayMs: 1500, label: 'Understat xG' }
     );
-
-      const raw = res.data?.teams;
-    if (!raw || typeof raw !== 'object' || Object.keys(raw).length === 0) {
-      throw new Error(`Understat API returned no teams data (keys: ${Object.keys(res.data ?? {}).join(', ')})`);
-    }
 
     const xgMap = {};
     const XG_DECAY = 0.92; // per-match exponential decay — same α as rolling ratings
@@ -528,23 +534,28 @@ async function fetchUnderstatXGForLeague(leagueId) {
 
   try {
     const year = new Date().getMonth() >= 6 ? new Date().getFullYear() : new Date().getFullYear() - 1;
-    const res  = await withRetry(
-      () => axios.get(`https://understat.com/getLeagueData/${slug}/${year}`, {
-        timeout: 15000,
-        headers: {
-          'User-Agent':        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-          'Accept':            'application/json, text/javascript, */*; q=0.01',
-          'Referer':           `https://understat.com/league/${slug}/${year}`,
-          'X-Requested-With':  'XMLHttpRequest',
-        },
-      }),
-      { maxAttempts: 2, label: `Understat xG ${leagueId}` }
+    // See fetchUnderstatXG() — the "empty teams" check must live inside the
+    // retried function so a soft anti-scraping block (HTTP 200, empty body)
+    // actually triggers a retry instead of failing on the first attempt.
+    const raw = await withRetry(
+      async () => {
+        const res = await axios.get(`https://understat.com/getLeagueData/${slug}/${year}`, {
+          timeout: 15000,
+          headers: {
+            'User-Agent':        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept':            'application/json, text/javascript, */*; q=0.01',
+            'Referer':           `https://understat.com/league/${slug}/${year}`,
+            'X-Requested-With':  'XMLHttpRequest',
+          },
+        });
+        const teams = res.data?.teams;
+        if (!teams || typeof teams !== 'object' || Object.keys(teams).length === 0) {
+          throw new Error(`Understat returned no teams data for ${slug}`);
+        }
+        return teams;
+      },
+      { maxAttempts: 3, baseDelayMs: 1500, label: `Understat xG ${leagueId}` }
     );
-
-    const raw = res.data?.teams;
-    if (!raw || typeof raw !== 'object' || Object.keys(raw).length === 0) {
-      throw new Error(`Understat returned no teams data for ${slug}`);
-    }
 
     const xgMap   = {};
     const XG_DECAY = 0.92;
