@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "NODE_ENV=production node server.js",
-    "server": "lsof -ti :3001 | xargs kill -9 2>/dev/null; PORT=3001 nodemon server.js --ignore prediction-history.json --ignore market-history.json --ignore wc-pre-predictions.json --ignore fd-season-seeds.json --ignore 'prediction-history-*.json' --ignore src/",
+    "server": "lsof -ti :3001 | xargs kill -9 2>/dev/null; PORT=3001 nodemon server.js --ignore prediction-history.json --ignore market-history.json --ignore wc-pre-predictions.json --ignore fd-season-seeds.json --ignore wc-fixtures-archive.json --ignore 'prediction-history-*.json' --ignore src/",
     "client": "vite",
     "dev": "concurrently --no-kill-others-on-fail --names server,client \"npm run server\" \"npm run client\"",
     "build": "vite build",

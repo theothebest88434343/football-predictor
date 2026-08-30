@@ -16,3 +16,4 @@ diagnostics-snapshot.json
 # Test suite snapshots (regenerated on --update)
 core/testing/footballRegressionSnapshots.json
 fd-season-seeds.json
+wc-fixtures-archive.json

@@ -3134,17 +3134,16 @@ function wcPoisson(homeTeam, awayTeam) {
 const ESPN_SCOREBOARD = 'https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard';
 const ESPN_STANDINGS  = 'https://site.api.espn.com/apis/v2/sports/soccer/fifa.world/standings';
 
-async function fetchESPN(url, cacheKey) {
+async function fetchESPN(url, cacheKey, ttlMs = 5 * 60 * 1000) {
   const cached = getCache(cacheKey);
   if (cached) return cached;
+  // No spoofed User-Agent — ESPN 403s browser-like UAs from non-browser
+  // clients, but serves axios's default UA fine.
   const res = await withRetry(
-    () => axios.get(url, {
-      timeout: 10000,
-      headers: { 'User-Agent': 'Mozilla/5.0' },
-    }),
+    () => axios.get(url, { timeout: 10000 }),
     { label: `ESPN ${cacheKey}` }
   );
-  setCache(cacheKey, res.data, 5 * 60 * 1000);
+  setCache(cacheKey, res.data, ttlMs);
   return res.data;
 }
 
@@ -3228,30 +3227,26 @@ function parseESPNStandings(data) {
 function wcTournamentPhase(fixtures) {
   if (!fixtures?.length) return 'PRE_TOURNAMENT';
 
-  const byRound = {};
+  // Classify each fixture into an exclusive round bucket — unlike raw substring
+  // matching, "final" here never accidentally catches "semifinals" (which also
+  // contains the substring "final").
+  const byRound = { group: [], r32: [], r16: [], qf: [], sf: [], final: [] };
   for (const f of fixtures) {
-    const r = (f.round ?? '').toLowerCase();
-    byRound[r] = byRound[r] ?? [];
-    byRound[r].push(f);
+    const key = _getRoundKey(f.round) ?? ((f.round ?? '').toLowerCase().includes('group') ? 'group' : null);
+    if (key && byRound[key]) byRound[key].push(f);
   }
 
-  const allDone  = (key) => {
-    const matches = Object.entries(byRound).filter(([k]) => k.includes(key));
-    return matches.length > 0 && matches.every(([, fs]) => fs.every(f => f._statusShort === 'FT'));
-  };
-  const hasRound = (key) => Object.keys(byRound).some(k => k.includes(key));
+  const exists  = (key) => byRound[key].length > 0;
+  const allDone = (key) => exists(key) && byRound[key].every(f => f._statusShort === 'FT');
 
-  if (allDone('final') && !hasRound('semi'))  return 'COMPLETE';
-  if (allDone('semi')  || hasRound('final'))  return 'FINAL';
-  if (allDone('quarter') || hasRound('semi')) return 'SEMI_FINALS';
-  if (allDone('round of 16') || hasRound('quarter')) return 'QUARTER_FINALS';
-  if (allDone('round of 32') || hasRound('round of 16')) return 'ROUND_OF_16';
-  if (allDone('group') || hasRound('round of 32')) return 'ROUND_OF_32';
+  if (allDone('final'))                  return 'COMPLETE';
+  if (exists('final') || allDone('sf'))  return 'FINAL';
+  if (exists('sf')    || allDone('qf'))  return 'SEMI_FINALS';
+  if (exists('qf')    || allDone('r16')) return 'QUARTER_FINALS';
+  if (exists('r16')   || allDone('r32')) return 'ROUND_OF_16';
+  if (exists('r32')   || allDone('group')) return 'ROUND_OF_32';
 
-  const anyStarted = Object.entries(byRound)
-    .filter(([k]) => k.includes('group'))
-    .some(([, fs]) => fs.some(f => f._statusShort !== 'NS'));
-
+  const anyStarted = byRound.group.some(f => f._statusShort !== 'NS');
   return anyStarted ? 'GROUP_STAGE' : 'PRE_TOURNAMENT';
 }
 
@@ -3793,6 +3788,52 @@ function computeGoldenBoot(reach) {
 }
 
 const WC_START = new Date('2026-06-11T00:00:00Z');
+// Day after the final — no WC games exist past this date.
+const WC_LAST_DAY = new Date('2026-07-20T00:00:00Z');
+
+// ── Completed-tournament fixture archive ──────────────────────────────────────
+// Once the tournament is over, ESPN's scoreboard stops serving its games and
+// re-fetching ~39 dated scoreboards forever is slow and fragile. The first time
+// we see a COMPLETE tournament we archive the merged fixture list (disk +
+// Supabase id=10) and serve it from there permanently.
+const WC_ARCHIVE_FILE = path.join(__dirname, 'wc-fixtures-archive.json');
+const WC_ARCHIVE_ID   = 10;
+let _wcArchiveCache = null;
+
+async function loadWcFixtureArchive() {
+  if (_wcArchiveCache) return _wcArchiveCache;
+  try {
+    const raw = JSON.parse(fs.readFileSync(WC_ARCHIVE_FILE, 'utf8'));
+    if (raw?.fixtures?.length) { _wcArchiveCache = raw; return raw; }
+  } catch {}
+  if (supabase) {
+    try {
+      const { data } = await supabase.from('wc_predictions').select('data').eq('id', WC_ARCHIVE_ID).maybeSingle();
+      if (data?.data?.fixtures?.length) {
+        _wcArchiveCache = data.data;
+        try { fs.writeFileSync(WC_ARCHIVE_FILE, JSON.stringify(data.data)); } catch {}
+        return _wcArchiveCache;
+      }
+    } catch (err) {
+      console.warn('[WC archive] load failed:', err.message);
+    }
+  }
+  return null;
+}
+
+function saveWcFixtureArchive(fixtures, groups) {
+  const payload = { fixtures, groups: groups ?? {}, archivedAt: new Date().toISOString() };
+  _wcArchiveCache = payload;
+  try { fs.writeFileSync(WC_ARCHIVE_FILE, JSON.stringify(payload)); } catch {}
+  if (supabase) {
+    supabase.from('wc_predictions')
+      .upsert({ id: WC_ARCHIVE_ID, saved_at: payload.archivedAt, data: payload }, { onConflict: 'id' })
+      .then(({ error }) => {
+        if (error) console.warn('[WC archive] save failed:', error.message);
+        else console.log(`[WC archive] Archived ${fixtures.length} fixtures to Supabase`);
+      });
+  }
+}
 
 // ── Pre-tournament predictions — computed once, frozen permanently ─────────────
 // Cached in memory for the lifetime of the process so stochastic results don't
@@ -4208,41 +4249,63 @@ app.get('/api/wc/tournament', async (req, res) => {
   }
 
   try {
-    // Build list of past matchdays we need to back-fill.
-    // ESPN scoreboard only returns today's/upcoming fixtures — completed games
-    // from previous days disappear. Fetch each past date individually.
-    const today    = new Date();
-    const pastDates = [];
-    const cursor   = new Date(WC_START);
-    cursor.setUTCHours(0, 0, 0, 0);
-    while (cursor < today) {
-      const ymd = cursor.toISOString().slice(0, 10).replace(/-/g, '');
-      pastDates.push(ymd);
-      cursor.setUTCDate(cursor.getUTCDate() + 1);
-    }
+    // Serve the completed tournament from the permanent archive when we have one.
+    const archive = await loadWcFixtureArchive();
 
-    // Fetch today's scoreboard + standings + all past matchday scoreboards in parallel
-    const [scoreboardData, standingsData, ...pastResults] = await Promise.allSettled([
-      fetchESPN(ESPN_SCOREBOARD, 'wc_scoreboard'),
-      fetchESPN(ESPN_STANDINGS,  'wc_standings'),
-      ...pastDates.map(ymd => fetchESPN(`${ESPN_SCOREBOARD}?dates=${ymd}`, `wc_scoreboard_${ymd}`)),
-    ]);
+    let fixtures, groups;
+    if (archive) {
+      fixtures = archive.fixtures;
+      groups   = archive.groups ?? {};
+    } else {
+      // Build list of past matchdays we need to back-fill.
+      // ESPN scoreboard only returns today's/upcoming fixtures — completed games
+      // from previous days disappear. Fetch each past date individually, capped
+      // at the tournament's last matchday.
+      const today    = new Date();
+      const pastDates = [];
+      const cursor   = new Date(WC_START);
+      cursor.setUTCHours(0, 0, 0, 0);
+      while (cursor < today && cursor < WC_LAST_DAY) {
+        const ymd = cursor.toISOString().slice(0, 10).replace(/-/g, '');
+        pastDates.push(ymd);
+        cursor.setUTCDate(cursor.getUTCDate() + 1);
+      }
 
-    // Merge all fixtures — past completed results take precedence, dedup by event id
-    const seenIds  = new Set();
-    const allFixtures = [];
-    // Past dates first (oldest → newest) so today's live status overwrites if same id
-    for (const result of [...pastResults, scoreboardData]) {
-      if (result.status !== 'fulfilled') continue;
-      for (const f of parseESPNFixtures(result.value)) {
-        if (!seenIds.has(f.id)) { seenIds.add(f.id); allFixtures.push(f); }
+      // Completed days never change — cache them for 24h. Today's scoreboard
+      // stays on the short TTL for live updates.
+      const todayYmd = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+      const [scoreboardData, standingsData, ...pastResults] = await Promise.allSettled([
+        fetchESPN(ESPN_SCOREBOARD, 'wc_scoreboard'),
+        fetchESPN(ESPN_STANDINGS,  'wc_standings'),
+        ...pastDates.map(ymd => fetchESPN(
+          `${ESPN_SCOREBOARD}?dates=${ymd}`,
+          `wc_scoreboard_${ymd}`,
+          ymd < todayYmd ? 24 * 60 * 60 * 1000 : undefined
+        )),
+      ]);
+
+      // Merge all fixtures — past completed results take precedence, dedup by event id
+      const seenIds  = new Set();
+      const allFixtures = [];
+      // Past dates first (oldest → newest) so today's live status overwrites if same id
+      for (const result of [...pastResults, scoreboardData]) {
+        if (result.status !== 'fulfilled') continue;
+        for (const f of parseESPNFixtures(result.value)) {
+          if (!seenIds.has(f.id)) { seenIds.add(f.id); allFixtures.push(f); }
+        }
+      }
+      fixtures = allFixtures;
+
+      groups = standingsData.status === 'fulfilled'
+        ? parseESPNStandings(standingsData.value)
+        : {};
+
+      // Tournament finished and fully fetched → archive permanently so we never
+      // depend on ESPN for it again.
+      if (wcTournamentPhase(fixtures) === 'COMPLETE') {
+        saveWcFixtureArchive(fixtures, groups);
       }
     }
-    const fixtures = allFixtures;
-
-    const groups = standingsData.status === 'fulfilled'
-      ? parseESPNStandings(standingsData.value)
-      : {};
 
     // Derive phase — use fixture statuses first, fall back to standings if scoreboard
     // only returned upcoming games (ESPN drops completed games after ~24h).
