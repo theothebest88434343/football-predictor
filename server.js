@@ -1448,23 +1448,32 @@ async function buildPrediction(fix, bs, allFixtures) {
 
     // Upsert to DB — match_uid UNIQUE constraint prevents duplicates on repeated calls.
     // Settle is chained inside .then() so the row exists before we query for it.
-    db.upsertPredictions(supabase, currentSeason?.id, [{
-      leagueId:  'premier-league',
-      roundId:   String(fix.event),
-      fixtureId: fix.id,
-      kickoff:   fix.kickoff_time,
-      homeTeam:  homeTeamObj,
-      awayTeam:  awayTeamObj,
-      prediction,
-      matchUid:  fixMatchUid,
-    }]).then(async () => {
-      if (immediateResult) {
-        const rows = await db.getUnsettledPredictions(supabase, currentSeason?.id, 'premier-league');
-        // Find by match_uid — the canonical identity.
-        const row  = rows.find(r => r.match_uid === fixMatchUid);
-        if (row) await db.settleResult(supabase, row.id, immediateResult.homeGoals, immediateResult.awayGoals);
-      }
-    }).catch(err => console.warn('[buildPrediction save]', err.message));
+    // Guard on currentSeason being loaded: app.listen()'s callback starts loading
+    // it asynchronously *after* the server is already accepting requests, so a
+    // request landing in that startup race window would otherwise write with
+    // seasonCode=undefined — buildMatchUid's .join(':') silently turns that into
+    // an empty prefix, creating a permanently duplicate, unfindable identity for
+    // that real match. Skip the write rather than corrupt the season's history;
+    // the caller still gets a freshly computed prediction back either way.
+    if (supabase && currentSeason?.id && fixMatchUid) {
+      db.upsertPredictions(supabase, currentSeason.id, [{
+        leagueId:  'premier-league',
+        roundId:   String(fix.event),
+        fixtureId: fix.id,
+        kickoff:   fix.kickoff_time,
+        homeTeam:  homeTeamObj,
+        awayTeam:  awayTeamObj,
+        prediction,
+        matchUid:  fixMatchUid,
+      }]).then(async () => {
+        if (immediateResult) {
+          const rows = await db.getUnsettledPredictions(supabase, currentSeason.id, 'premier-league');
+          // Find by match_uid — the canonical identity.
+          const row  = rows.find(r => r.match_uid === fixMatchUid);
+          if (row) await db.settleResult(supabase, row.id, immediateResult.homeGoals, immediateResult.awayGoals);
+        }
+      }).catch(err => console.warn('[buildPrediction save]', err.message));
+    }
   }
 
   return {
@@ -5193,25 +5202,30 @@ app.get('/api/fd/predictions', async (req, res) => {
     setCache(cacheKey, result, TTL.XPTS);
 
     // Upsert to DB — match_uid UNIQUE constraint prevents duplicates on repeated calls.
-    const fdMatchUid = db.buildMatchUid(currentSeason?.code, leagueId, match.homeTeam.name, match.awayTeam.name);
-    db.upsertPredictions(supabase, currentSeason?.id, [{
-      leagueId:  leagueId,
-      roundId:   String(match.matchday),
-      fixtureId: fixtureId,
-      kickoff:   match.kickoffTime,
-      homeTeam:  match.homeTeam,
-      awayTeam:  match.awayTeam,
-      prediction,
-      matchUid:  fdMatchUid,
-    }]).then(async () => {
-      // Settle immediately if the match is already finished.
-      // Find by match_uid — the canonical identity.
-      if (match.finished && match.homeGoals != null) {
-        const rows = await db.getUnsettledPredictions(supabase, currentSeason?.id, leagueId);
-        const row  = rows.find(r => r.match_uid === fdMatchUid);
-        if (row) await db.settleResult(supabase, row.id, match.homeGoals, match.awayGoals);
-      }
-    }).catch(err => console.warn('[FD prediction save]', err.message));
+    // Guard on currentSeason being loaded (see the identical guard in
+    // buildPrediction for why) — skip the write rather than create a
+    // permanently duplicate/unfindable identity for this real match.
+    if (supabase && currentSeason?.id) {
+      const fdMatchUid = db.buildMatchUid(currentSeason.code, leagueId, match.homeTeam.name, match.awayTeam.name);
+      db.upsertPredictions(supabase, currentSeason.id, [{
+        leagueId:  leagueId,
+        roundId:   String(match.matchday),
+        fixtureId: fixtureId,
+        kickoff:   match.kickoffTime,
+        homeTeam:  match.homeTeam,
+        awayTeam:  match.awayTeam,
+        prediction,
+        matchUid:  fdMatchUid,
+      }]).then(async () => {
+        // Settle immediately if the match is already finished.
+        // Find by match_uid — the canonical identity.
+        if (match.finished && match.homeGoals != null) {
+          const rows = await db.getUnsettledPredictions(supabase, currentSeason.id, leagueId);
+          const row  = rows.find(r => r.match_uid === fdMatchUid);
+          if (row) await db.settleResult(supabase, row.id, match.homeGoals, match.awayGoals);
+        }
+      }).catch(err => console.warn('[FD prediction save]', err.message));
+    }
 
     res.json(result);
   } catch (err) {
