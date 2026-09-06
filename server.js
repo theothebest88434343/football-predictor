@@ -5529,8 +5529,17 @@ async function preFillPredictions() {
     console.warn('[PreFill PL]', err.message);
   }
 
-  // ── FD leagues (La Liga, Bundesliga, Ligue 1, Serie A) ─────────────────────
-  for (const leagueId of Object.keys(FD_CODE)) {
+  // ── FD leagues (La Liga, Bundesliga, Ligue 1, Serie A, etc.) ────────────────
+  // Premier League is deliberately excluded — it's already fully handled by the
+  // FPL-based block above, and both settle paths (autoFillFdResults,
+  // backfillPendingResults) already treat PL as FPL-only. Without this
+  // exclusion here too, this loop kept creating a second, permanently
+  // unsettleable prediction (keyed by football-data's team ids, which the PL
+  // settle paths don't match against) for every PL fixture, every cycle —
+  // and detectAndCompleteRounds requires every prediction in a round to be
+  // resolved before marking it complete, so this silently blocked every PL
+  // gameweek from ever finishing and showing up in History.
+  for (const leagueId of Object.keys(FD_CODE).filter(id => id !== 'premier-league')) {
     try {
       const code = FD_CODE[leagueId];
 
