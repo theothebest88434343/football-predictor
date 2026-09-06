@@ -90,6 +90,29 @@ const db = require('./core/db/predictions');
 // Shape: { id: uuid, code: '2025-26' } | null (when Supabase unavailable)
 let currentSeason = null;
 
+// ─── Rating anomaly tracking ──────────────────────────────────────────────────
+// predict() flags any team rating that's both near its extreme clamp bounds and
+// backed by very few games — the exact signature of a small-sample distortion
+// (e.g. Liverpool's home defense getting pinned near the ceiling off one fluky
+// match). Collected during preFillPredictions(), which touches every fixture in
+// every league each cycle, so this is a standing safety net rather than
+// something that only gets caught if a user happens to notice and mention it.
+let _ratingAnomalies = [];
+
+function _collectAnomalies(prediction, leagueId, homeTeam, awayTeam, fixtureId) {
+  if (!prediction?.ratingAnomalies?.length) return;
+  for (const a of prediction.ratingAnomalies) {
+    const team = a.side === 'home' ? homeTeam : awayTeam;
+    _ratingAnomalies.push({
+      leagueId, fixtureId,
+      team: team?.name ?? String(a.teamId),
+      side: a.side, metric: a.metric, value: a.value, games: a.games,
+      matchup: `${homeTeam?.name ?? '?'} vs ${awayTeam?.name ?? '?'}`,
+      flaggedAt: new Date().toISOString(),
+    });
+  }
+}
+
 // ─── App setup ────────────────────────────────────────────────────────────────
 
 const app  = express();
@@ -4468,6 +4491,27 @@ function saveDiagnosticsSnapshot(rankings) {
 }
 
 // GET /api/model-diagnostics
+// GET /api/rating-anomalies — read-only safety-net view. Lists every team
+// rating currently near its extreme clamp bounds while backed by very few
+// games, as of the last preFillPredictions() cycle (runs hourly). This is the
+// automated version of what caught the Liverpool small-sample bug — a human
+// noticing a weird prediction and asking about it. Refreshed every PreFill run.
+app.get('/api/rating-anomalies', (req, res) => {
+  // Dedupe: the same team/metric anomaly repeats once per upcoming fixture
+  // that team is in, since PreFill predicts the whole remaining schedule every
+  // cycle. Collapse to one row per distinct (league, team, side, metric),
+  // keeping an example matchup and a count of how many fixtures it affects.
+  const byKey = new Map();
+  for (const a of _ratingAnomalies) {
+    const key = `${a.leagueId}|${a.team}|${a.side}|${a.metric}`;
+    const existing = byKey.get(key);
+    if (existing) existing.affectedFixtures++;
+    else byKey.set(key, { ...a, affectedFixtures: 1 });
+  }
+  const anomalies = [...byKey.values()].sort((a, b) => b.affectedFixtures - a.affectedFixtures);
+  res.json({ count: anomalies.length, totalFlaggedFixtures: _ratingAnomalies.length, anomalies });
+});
+
 app.get('/api/model-diagnostics', (req, res) => {
   const now = Date.now();
   if (_diagnosticsCache && (now - _diagnosticsCacheAt) < DIAGNOSTICS_TTL) {
@@ -5437,6 +5481,7 @@ app.get('/api/fd/scorers', async (req, res) => {
 async function preFillPredictions() {
   if (!currentSeason?.id) return;
   const rows = []; // collected across PL + FD leagues; bulk-upserted at end
+  _ratingAnomalies = []; // fresh snapshot each cycle — every league gets re-checked
 
   // ── Premier League ──────────────────────────────────────────────────────────
   try {
@@ -5513,6 +5558,7 @@ async function preFillPredictions() {
         awayRestDays:     plAwayRest,
         teamHomeAdvFactor: plHomeAdv,
       });
+      _collectAnomalies(prediction, 'premier-league', homeTeam, awayTeam, fix.id);
 
       rows.push({
         leagueId:  'premier-league',
@@ -5586,6 +5632,7 @@ async function preFillPredictions() {
           awayRestDays:     bulkAwayRest,
           teamHomeAdvFactor: bulkHomeAdv,
         });
+        _collectAnomalies(prediction, leagueId, match.homeTeam, match.awayTeam, match.id);
 
         rows.push({
           leagueId:  leagueId,
@@ -5608,6 +5655,13 @@ async function preFillPredictions() {
   if (rows.length > 0) {
     await db.upsertPredictions(supabase, currentSeason.id, rows);
     console.log(`[PreFill] Upserted ${rows.length} prediction(s) (duplicates ignored)`);
+  }
+
+  if (_ratingAnomalies.length > 0) {
+    console.warn(`[RatingAnomaly] ${_ratingAnomalies.length} extreme rating(s) on small samples this cycle — see GET /api/rating-anomalies`);
+    for (const a of _ratingAnomalies) {
+      console.warn(`  ${a.team} ${a.side} ${a.metric}=${a.value} (${a.games} games) — ${a.matchup} [${a.leagueId}]`);
+    }
   }
 }
 

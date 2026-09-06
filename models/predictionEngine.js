@@ -537,10 +537,46 @@ function calculateLambdas({
   lH = Math.max(LAMBDA_FLOOR, lH);
   lA = Math.max(LAMBDA_FLOOR, lA);
 
+  // ─── Small-sample rating anomaly detection ───────────────────────────────────
+  // Flags a rating that's both near the extreme clamp bounds AND backed by very
+  // few real games — the exact signature of the bug where Liverpool's home
+  // defense got pinned near the ceiling off a single fluky match. A rating this
+  // extreme with a large sample is probably just a genuinely bad/great team;
+  // the same extreme with 1-2 games is more likely small-sample noise worth a
+  // human glance. Purely diagnostic — never changes the prediction itself.
+  // Tight on purpose: early in any season most teams sit at 3-8 games with
+  // moderately stretched ratings — that's normal, not a bug. These thresholds
+  // are calibrated to catch only the true "pinned at the wall" signature
+  // (Liverpool was 1.6 of a 1.7 ceiling on 3 games) rather than flooding this
+  // with every team that simply hasn't played much yet.
+  const ANOMALY_MARGIN     = 0.08; // within this of STRENGTH_MIN/MAX counts as "extreme"
+  const ANOMALY_MAX_GAMES  = 4;    // fewer than this many games ⇒ flag if also extreme
+  const anomalies = [];
+  const checkAnomaly = (side, metric, value, id) => {
+    const nearFloor = value <= STRENGTH_MIN + ANOMALY_MARGIN;
+    const nearCeil  = value >= STRENGTH_MAX - ANOMALY_MARGIN;
+    if (!nearFloor && !nearCeil) return;
+    // Sample size of whichever signal is actually available for this team — xG's
+    // own game count if present, else the team's overall season game count from
+    // form data. Without this fallback, a team with NO xG data at all (using the
+    // fully unprotected last-resort branch in baseAtk/baseDef) would silently
+    // skip the check entirely, even though that path is the least protected
+    // against small-sample noise of all of them.
+    const games = xGData[id]?.games ?? formData[id]?.seasonGames ?? 0;
+    if (games > 0 && games < ANOMALY_MAX_GAMES) {
+      anomalies.push({ side, metric, value: +value.toFixed(3), games, teamId: id });
+    }
+  };
+  checkAnomaly('home', 'attack',  hAtk, homeTeam.id);
+  checkAnomaly('home', 'defense', hDef, homeTeam.id);
+  checkAnomaly('away', 'attack',  aAtk, awayTeam.id);
+  checkAnomaly('away', 'defense', aDef, awayTeam.id);
+
   return {
     homeLambda: lH,
     awayLambda: lA,
     strengths: { hAtk, hDef, aAtk, aDef },
+    ratingAnomalies: anomalies,
   };
 }
 
@@ -742,7 +778,7 @@ function runMonteCarlo(lH, lA) {
 // ─── Full prediction pipeline ─────────────────────────────────────────────────
 
 function predict(params) {
-  const { homeLambda, awayLambda, strengths } = calculateLambdas(params);
+  const { homeLambda, awayLambda, strengths, ratingAnomalies } = calculateLambdas(params);
 
   // Analytical score matrix (pure Poisson — Dixon-Coles removed after empirical sweep)
   const matrix    = buildScoreMatrix(homeLambda, awayLambda);
@@ -836,6 +872,7 @@ function predict(params) {
     confidence,
     lambdas:   { home: homeLambda, away: awayLambda },
     strengths,
+    ratingAnomalies,
   };
 }
 
