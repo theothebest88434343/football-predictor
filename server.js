@@ -98,9 +98,17 @@ let currentSeason = null;
 // every league each cycle, so this is a standing safety net rather than
 // something that only gets caught if a user happens to notice and mention it.
 let _ratingAnomalies = [];
+const RATING_ANOMALIES_MAX = 2000; // defensive cap — see note below
 
 function _collectAnomalies(prediction, leagueId, homeTeam, awayTeam, fixtureId) {
   if (!prediction?.ratingAnomalies?.length) return;
+  // Defensive cap: if preFillPredictions() ever overlaps with itself (e.g. the
+  // startup call still running when the hourly cron fires) both invocations
+  // push into this same array with no coordination, and it can grow far larger
+  // than a single clean cycle would produce. Stop collecting once it's clearly
+  // past what a real single-cycle result should ever be, rather than let an
+  // unbounded array make the read endpoint's dedupe pass expensive.
+  if (_ratingAnomalies.length >= RATING_ANOMALIES_MAX) return;
   for (const a of prediction.ratingAnomalies) {
     const team = a.side === 'home' ? homeTeam : awayTeam;
     _ratingAnomalies.push({
@@ -4497,19 +4505,31 @@ function saveDiagnosticsSnapshot(rankings) {
 // automated version of what caught the Liverpool small-sample bug — a human
 // noticing a weird prediction and asking about it. Refreshed every PreFill run.
 app.get('/api/rating-anomalies', (req, res) => {
-  // Dedupe: the same team/metric anomaly repeats once per upcoming fixture
-  // that team is in, since PreFill predicts the whole remaining schedule every
-  // cycle. Collapse to one row per distinct (league, team, side, metric),
-  // keeping an example matchup and a count of how many fixtures it affects.
-  const byKey = new Map();
-  for (const a of _ratingAnomalies) {
-    const key = `${a.leagueId}|${a.team}|${a.side}|${a.metric}`;
-    const existing = byKey.get(key);
-    if (existing) existing.affectedFixtures++;
-    else byKey.set(key, { ...a, affectedFixtures: 1 });
+  try {
+    const startedAt = Date.now();
+    const rawCount  = _ratingAnomalies.length;
+
+    // Dedupe: the same team/metric anomaly repeats once per upcoming fixture
+    // that team is in, since PreFill predicts the whole remaining schedule
+    // every cycle. Collapse to one row per distinct (league, team, side,
+    // metric), keeping an example matchup and a count of affected fixtures.
+    const byKey = new Map();
+    for (const a of _ratingAnomalies) {
+      const key = `${a.leagueId}|${a.team}|${a.side}|${a.metric}`;
+      const existing = byKey.get(key);
+      if (existing) existing.affectedFixtures++;
+      else byKey.set(key, { ...a, affectedFixtures: 1 });
+    }
+    const anomalies = [...byKey.values()].sort((a, b) => b.affectedFixtures - a.affectedFixtures);
+
+    const elapsedMs = Date.now() - startedAt;
+    if (elapsedMs > 500) console.warn(`[RatingAnomaly] dedupe took ${elapsedMs}ms over ${rawCount} raw entries — investigate`);
+
+    res.json({ count: anomalies.length, totalFlaggedFixtures: rawCount, anomalies });
+  } catch (err) {
+    console.error('[GET /api/rating-anomalies]', err.message);
+    res.status(500).json({ error: err.message });
   }
-  const anomalies = [...byKey.values()].sort((a, b) => b.affectedFixtures - a.affectedFixtures);
-  res.json({ count: anomalies.length, totalFlaggedFixtures: _ratingAnomalies.length, anomalies });
 });
 
 app.get('/api/model-diagnostics', (req, res) => {
