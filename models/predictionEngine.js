@@ -52,6 +52,16 @@ const RATING_MAX   = 1.6;
 const HOME_ADV_MIN = 0.85;  // was 1.0 — now allows home losses to pull homeAdv down
 const HOME_ADV_MAX = 1.25;
 
+// xG small-sample shrinkage: xG has no smoothing of its own (unlike rolling
+// ratings' slow EWMA), so with only a handful of games it fully trusts
+// whatever happened in them — one fluky match (e.g. a high-chance-conceded
+// draw) can lock a team into a near-worst-possible rating for the rest of the
+// season. Blend the raw xG-implied ratio toward the smoother rolling-ratings
+// prior, weighted by how many games xG's own sample actually contains.
+// trust = games / (games + K) — at K games a team is 50% trusted; scales up
+// toward (but never quite reaches) full trust as more games accumulate.
+const XG_SHRINKAGE_K = 6;
+
 // ELO
 const ELO_K        = 20;
 const ELO_HOME_ADV = 50;
@@ -335,13 +345,17 @@ function calculateLambdas({
   const baseAtk = (id, isHome) => {
     const xg  = xGData[id];
     const avg = isHome ? leagueAvgHome : leagueAvgAway;
+    const rolling = ratingMap[String(id)];
 
     if (xg && xg.seasonXG > 0) {
       const venueXG = isHome ? (xg.homeXG ?? xg.seasonXG) : (xg.awayXG ?? xg.seasonXG);
-      return (0.6 * venueXG + 0.4 * xg.seasonXG) / avg;
+      const xgRatio = (0.6 * venueXG + 0.4 * xg.seasonXG) / avg;
+      const games   = xg.games ?? 0;
+      const trust   = games / (games + XG_SHRINKAGE_K);
+      const prior   = rolling ? rolling.attack : 1.0;
+      return trust * xgRatio + (1 - trust) * prior;
     }
 
-    const rolling = ratingMap[String(id)];
     const form = formData[id];
     if (rolling) {
       // Blend slow EWMA with current-season venue rate to improve responsiveness
@@ -364,13 +378,17 @@ function calculateLambdas({
   const baseDef = (id, isHome) => {
     const xg  = xGData[id];
     const avg = isHome ? leagueAvgAway : leagueAvgHome;
+    const rolling = ratingMap[String(id)];
 
     if (xg && xg.seasonXGA > 0) {
       const venueXGA = isHome ? (xg.homeXGA ?? xg.seasonXGA) : (xg.awayXGA ?? xg.seasonXGA);
-      return (0.6 * venueXGA + 0.4 * xg.seasonXGA) / avg;
+      const xgRatio = (0.6 * venueXGA + 0.4 * xg.seasonXGA) / avg;
+      const games   = xg.games ?? 0;
+      const trust   = games / (games + XG_SHRINKAGE_K);
+      const prior   = rolling ? clamp(rolling.defense, RATING_MIN, RATING_MAX) : 1.0;
+      return trust * xgRatio + (1 - trust) * prior;
     }
 
-    const rolling = ratingMap[String(id)];
     const form = formData[id];
     if (rolling) {
       // Blend slow EWMA defensive rating with current-season conceded rate
