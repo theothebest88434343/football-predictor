@@ -5894,18 +5894,25 @@ cron.schedule('0 10 * * *',   runModelTuningAgent);        // daily at 10am — 
 
 // ─── Production static + SPA fallback ────────────────────────────────────────
 
+// Any /api/* request that reaches this catch-all means no earlier route
+// matched it — a typo'd path, a removed route, anything. Previously this
+// silently did nothing for that case: no response, no next(), no error —
+// the client just hung forever with zero indication of what went wrong.
+// Return an explicit 404 instead so a broken route fails fast and visibly.
 if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.join(__dirname, 'dist')));
   app.get('*', (req, res) => {
-    if (!req.path.startsWith('/api')) {
-      res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+    if (req.path.startsWith('/api')) {
+      return res.status(404).json({ error: 'Not found' });
     }
+    res.sendFile(path.join(__dirname, 'dist', 'index.html'));
   });
 } else {
   app.get('*', (req, res) => {
-    if (!req.path.startsWith('/api')) {
-      res.redirect('http://localhost:5173' + req.originalUrl);
+    if (req.path.startsWith('/api')) {
+      return res.status(404).json({ error: 'Not found' });
     }
+    res.redirect('http://localhost:5173' + req.originalUrl);
   });
 }
 
