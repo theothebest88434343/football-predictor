@@ -5620,7 +5620,9 @@ async function preFillPredictions() {
 async function snapshotAccuracy() {
   if (!supabase || !currentSeason?.id) return;
 
-  const allLeagues = ['premier-league', ...Object.keys(FD_CODE)];
+  // FD_CODE already contains a 'premier-league' entry (needed for
+  // /api/fd/standings etc.) — dedupe so PL isn't processed twice per run.
+  const allLeagues = [...new Set(['premier-league', ...Object.keys(FD_CODE)])];
   const today      = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
   const season     = currentSeason.code ?? db.computeSeasonCode();
 
@@ -5703,7 +5705,9 @@ async function runModelTuningAgent() {
   if (!supabase || !currentSeason?.id) return;
   if (!groq) { console.warn('[TuningAgent] Groq not configured — skipping'); return; }
 
-  const allLeagues = ['premier-league', ...Object.keys(FD_CODE)];
+  // FD_CODE already contains a 'premier-league' entry (needed for
+  // /api/fd/standings etc.) — dedupe so PL isn't processed twice per run.
+  const allLeagues = [...new Set(['premier-league', ...Object.keys(FD_CODE)])];
   const today      = new Date().toISOString().slice(0, 10);
   const season     = currentSeason.code ?? db.computeSeasonCode();
 
